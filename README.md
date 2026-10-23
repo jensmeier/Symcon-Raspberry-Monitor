@@ -1,20 +1,19 @@
-# Symcon Raspberry Monitor 0.6
+# Symcon Raspberry Monitor 0.7
 
-IP-Symcon 9.0: native HTML-SDK-Instanzkachel mit responsiven Geräten, IP-Hinzufügen, manuell begrenzter SSH-Port-Suche, SSH-Systemstatus.
+IP-Symcon 9.0 HTML-SDK – helle Systemverwaltung im Stil der Symcon-Kachelvisualisierung.
 
-## Upgrade
-Bestehende Modulinstanz und Geräte-Property `Devices` bleiben erhalten. Keine zweite Instanz erzeugen. Die alten Bedien-/HTMLBox-Variablen werden **ausgeblendet, nicht gelöscht**. IP-Symcon Visualisierung: Instanzkachel "Raspberry Überwachung" anzeigen und auf volle Breite stellen.
+## Änderungen
+- Helles Dashboard mit zwei responsiven Systemkarten.
+- Gerät direkt in der Oberfläche verwalten (umbenennen, Status per SSH neu prüfen, aus Überwachung entfernen).
+- Raspberry über IP hinzufügen und begrenzte SSH-Port-Suche.
+- Bestehende Instanz, Geräte-Property `Devices` und Modulkennungen bleiben erhalten.
+- Beim Entfernen werden **keine Dateien oder Geräte auf dem Raspberry gelöscht**.
 
-## Funktionen
-- Zwei oder mehr Rechner nebeneinander bei genügend Breite.
-- Neue IP über Dialog hinzufügen.
-- Netzwerk-SSH-Suche über einstellbaren 32-IP-Abschnitt.
-- Geräte nur auf ausdrücklichen Wunsch eintragen.
-- Live-Aktualisierung über das HTML-SDK.
-- Alle Aktionen lesend; keine Updates, Neustarts oder SSH-Veränderungen.
+## Update
+Bestehende IP-Symcon Modulbibliothek auf GitHub aktualisieren, vorhandene Instanz weiterverwenden, Moduländerungen übernehmen. Die Kachel in der Visualisierung möglichst breit anordnen.
 
 ## Sicherheit
-Zugriff auf Instanzkachel nur über geschützte Symcon-Visualisierung. Für Remotezugriff benötigt Symcon einen bereits eingerichteten SSH-Schlüssel. Das Erfassen eines offenen SSH-Ports ersetzt keine Authentifizierung. Keine Kennwörter im Repository. Bitte bei mehreren Visualisierungsnutzern deren Zugriffsrechte prüfen.
+Lesender Systemstatus. Neustarts und Updateinstallationen bleiben deaktiviert. SSH benötigt vorher eingerichtete Schlüssel. Netzwerksuche weist nur erreichbare SSH-Ports nach, nicht Gerätetyp oder gültige Anmeldung. Zugang zur Visualisierung einschränken.
 
-## Testen
-Update der bestehenden Bibliothek, bestehende Instanz öffnen, Geräte sichtbar? Aktualisieren, Dialog IP hinzufügen und Scan durchführen. PHP-Lint und JSON-Prüfung ersetzen keinen Symcon-Livetest.
+## Einschränkungen
+Die grafische Oberfläche nutzt das HTML-SDK. Bei sehr kleinen Kachelbreiten erfolgt eine einspaltige Darstellung. Die JavaScript-Dialoge benötigen einen Test in deiner echten Symcon-Visualisierung. Kein vollautomatischer SSH-Onboarding-Assistent, keine geprüfte MQTT-Anmeldung und keine Updateinstallation in dieser Version.
