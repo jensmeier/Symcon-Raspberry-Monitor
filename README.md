@@ -1,4 +1,4 @@
-# Symcon Raspberry Monitor 1.7 (Entwicklungsstand)
+# Symcon Raspberry Monitor 1.8 (Entwicklungsstand)
 
 IP-Symcon 9.0: responsive, helle HTML-SDK-Oberfläche zur Überwachung von Linux-/Raspberry-Pi-Systemen.
 
@@ -45,6 +45,12 @@ IP-Symcon 9.0: responsive, helle HTML-SDK-Oberfläche zur Überwachung von Linux
 - Unterscheidet Broker nicht erreichbar, gültige CONNACK-Antwort, Anmeldung erforderlich und Protokollfehler.
 - Dieser Test bestätigt **nicht** die MQTT-Sitzung des Zigbee2MQTT-Clients. Bridge-Status und Journalauswertung bleiben daher separat.
 - IP und Port sind konfigurierbar. Kein Neustart, keine Updates, keine Passwortspeicherung.
+
+## Neu in 1.8
+- Einklappbare Systemmeldungen direkt in der Visualisierung.
+- Erfasst ausschließlich Zustandswechsel: Online/Offline, neu auftretende Warnungen und deren Behebung.
+- Begrenzung auf die letzten 100 Ereignisse im Modul-Puffer. Kein wiederholtes Logging identischer Warnungen bei jeder Prüfung.
+- Keine neuen Variablen. Kein automatisches Installieren oder Neustarten. Modul-Puffer ist keine dauerhafte Audit-Datenbank; seine Beständigkeit muss in der jeweiligen Symcon-Installation geprüft werden.
 
 ## Funktionen
 - Systemkarten mit CPU-Temperatur, RAM, Festplatte, Debian, Kernel und APT-Paketupdateanzahl.
