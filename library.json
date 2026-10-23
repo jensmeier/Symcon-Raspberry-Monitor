@@ -3,8 +3,10 @@
   "author": "JZCG",
   "name": "Symcon Raspberry Monitor",
   "url": "",
-  "compatibility": {"version": "8.1"},
-  "version": "0.1",
-  "build": 1,
+  "compatibility": {
+    "version": "8.1"
+  },
+  "version": "0.5",
+  "build": 5,
   "date": 1792771200
 }
