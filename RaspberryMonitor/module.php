@@ -417,7 +417,7 @@ class RaspberryMonitor extends IPSModule
         $remote = ($device['mode'] ?? 'ssh') !== 'local';
         $user = (string)($device['user'] ?? 'pi');
         $key = (string)($device['key'] ?? '');
-        $state = ['name' => $name, 'ip' => $ip, 'online' => false, 'os' => '–', 'kernel' => '–', 'temp' => '–', 'ram' => '–', 'disk' => '–', 'updates' => '–', 'service' => '–', 'node' => '–', 'zigbeeVersion' => '–', 'symconService' => '–', 'error' => ''];
+        $state = ['name' => $name, 'ip' => $ip, 'online' => false, 'os' => '–', 'kernel' => '–', 'temp' => '–', 'ram' => '–', 'disk' => '–', 'updates' => '–', 'service' => '–', 'node' => '–', 'zigbeeVersion' => '–', 'symconService' => '–', 'mqttDiagnosis' => 'Nicht geprüft', 'error' => ''];
         if (!filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) { $state['error'] = 'Ungültige IPv4-Adresse'; return $state; }
         if ($remote && (!preg_match('/^[a-z_][a-z0-9_-]{0,31}$/', $user) || !preg_match('#^/[a-zA-Z0-9/_\.\-]+$#', $key))) {
             $state['error'] = 'SSH-Nutzer oder Schlüsselpfad ungültig'; return $state;
@@ -443,6 +443,25 @@ SH;
             if ($k === 'NODE') $state['node'] = $v;
             if ($k === 'Z2MV') $state['zigbeeVersion'] = $v;
             if ($k === 'TEMP' && is_numeric($v)) $state['temp'] = number_format(((float)$v) / 1000, 1, ',', '.').' °C';
+        }
+        if ($state['service'] === 'active') {
+            // Protokollbasierte Zusatzdiagnose: kein Beweis für eine bestehende MQTT-Sitzung.
+            // '-q' unterdrückt Journal-Metadaten, '-n' begrenzt den Datenumfang.
+            [$logOK, $logText] = $this->run(
+                'journalctl -u zigbee2mqtt --since "-5 minutes" --no-pager -n 100 -q',
+                $remote, $ip, $user, $key
+            );
+            if (!$logOK) {
+                $state['mqttDiagnosis'] = 'Journal nicht lesbar';
+            } elseif (stripos($logText, 'Not connected to MQTT server') !== false ||
+                      stripos($logText, 'Connection refused') !== false ||
+                      stripos($logText, 'MQTT connection lost') !== false) {
+                $state['mqttDiagnosis'] = 'Warnung: MQTT-Fehler im Journal (5 Min.)';
+            } else {
+                $state['mqttDiagnosis'] = 'Keine MQTT-Fehler im Journal (5 Min.); Verbindung nicht bewiesen';
+            }
+        } else {
+            $state['mqttDiagnosis'] = 'Nicht anwendbar';
         }
         return $state;
     }
