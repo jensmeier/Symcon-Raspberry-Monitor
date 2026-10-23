@@ -20,6 +20,8 @@ class RaspberryMonitor extends IPSModule
         $this->RegisterPropertyBoolean('AllowRestart', false);
         $this->RegisterPropertyBoolean('AllowServiceRestart', false);
         $this->RegisterPropertyInteger('ScanStart', 1);
+        $this->RegisterPropertyInteger('ZigbeeBridgeStatusID', 27220);
+        $this->RegisterPropertyInteger('BridgeFreshnessMinutes', 10);
         $this->RegisterTimer('RefreshTimer', 0, 'SRM_Refresh($_IPS[\'TARGET\']);');
         $this->RegisterVariableString('Overview', 'Raspberry Übersicht', '~HTMLBox');
         $this->RegisterVariableString('Details', 'Systemdiagnose');
@@ -463,6 +465,41 @@ class RaspberryMonitor extends IPSModule
             $states[] = $this->readDevice(is_array($item) ? $item : []);
         }
         $restartJobs = $this->monitorRestarts($states);
+        // Bestehende Symcon-Zigbee2MQTT-Bridge verwenden, keine MQTT-Credentials duplizieren.
+        // Status 27220 laut Geräteübersicht = OK. Nur mit frischem VariableUpdated auswerten.
+        $bridgeID = $this->ReadPropertyInteger('ZigbeeBridgeStatusID');
+        $maxAge = max(1, $this->ReadPropertyInteger('BridgeFreshnessMinutes')) * 60;
+        $bridge = ['status' => 'unknown', 'label' => 'Bridge nicht konfiguriert', 'ageSeconds' => null, 'source' => $bridgeID];
+        if ($bridgeID > 0 && IPS_VariableExists($bridgeID)) {
+            $v = IPS_GetVariable($bridgeID);
+            if (($v['VariableType'] ?? -1) === 0) {
+                $updated = (int)($v['VariableUpdated'] ?? 0);
+                $age = $updated > 0 ? max(0, time() - $updated) : null;
+                $bridge['ageSeconds'] = $age;
+                if ($age === null || $age > $maxAge) {
+                    $bridge['status'] = 'stale';
+                    $bridge['label'] = 'Bridge-Status nicht frisch – MQTT nicht bestätigt';
+                } elseif (GetValueBoolean($bridgeID)) {
+                    $bridge['status'] = 'ok';
+                    $bridge['label'] = 'Bridge meldet OK (frischer Status)';
+                } else {
+                    $bridge['status'] = 'error';
+                    $bridge['label'] = 'Bridge meldet Störung';
+                }
+            } else {
+                $bridge['label'] = 'Bridge-Statusvariable muss Boolean sein';
+            }
+        } elseif ($bridgeID > 0) {
+            $bridge['label'] = 'Bridge-Statusvariable '.$bridgeID.' nicht gefunden';
+        }
+        foreach ($states as &$state) {
+            if (($state['service'] ?? '') === 'active') {
+                $state['bridgeMQTT'] = $bridge;
+                if ($bridge['status'] === 'error') $state['warnings'][] = 'Zigbee2MQTT-Bridge meldet Störung';
+                // Ein frischer Bridge-Wert ist ein Indikator, kein eigener MQTT-CONNACK-Test.
+            }
+        }
+        unset($state);
         // Begrenzte, interne Messhistorie: keine zusätzlichen Symcon-Variablen.
         $history = json_decode($this->GetBuffer('MetricsHistory'), true);
         if (!is_array($history)) $history = [];
