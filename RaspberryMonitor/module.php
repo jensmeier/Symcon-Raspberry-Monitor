@@ -22,6 +22,8 @@ class RaspberryMonitor extends IPSModule
         $this->RegisterPropertyInteger('ScanStart', 1);
         $this->RegisterPropertyInteger('ZigbeeBridgeStatusID', 27220);
         $this->RegisterPropertyInteger('BridgeFreshnessMinutes', 10);
+        $this->RegisterPropertyString('MQTTBrokerIP', '192.168.178.41');
+        $this->RegisterPropertyInteger('MQTTBrokerPort', 1029);
         $this->RegisterTimer('RefreshTimer', 0, 'SRM_Refresh($_IPS[\'TARGET\']);');
         $this->RegisterVariableString('Overview', 'Raspberry Übersicht', '~HTMLBox');
         $this->RegisterVariableString('Details', 'Systemdiagnose');
@@ -526,7 +528,7 @@ class RaspberryMonitor extends IPSModule
             }
         }
         unset($state);
-        $brokerCheck = $this->probeMQTTBroker('192.168.178.41', 1029);
+        $brokerCheck = $this->probeMQTTBroker($this->ReadPropertyString('MQTTBrokerIP'), $this->ReadPropertyInteger('MQTTBrokerPort'));
         // Begrenzte, interne Messhistorie: keine zusätzlichen Symcon-Variablen.
         $history = json_decode($this->GetBuffer('MetricsHistory'), true);
         if (!is_array($history)) $history = [];
