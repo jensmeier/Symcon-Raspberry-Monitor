@@ -124,16 +124,37 @@ class RaspberryMonitor extends IPSModule
                     $ip = (string)$Value;
                     $item = $this->deviceByIP($ip);
                     $remote = ($item['mode'] ?? 'ssh') !== 'local';
-                    $command = 'LC_ALL=C apt-get -s upgrade';
-                    [$ok, $out] = $this->run($command, $remote, $ip, (string)($item['user'] ?? 'pi'), (string)($item['key'] ?? ''));
-                    if (!$ok) throw new Exception(substr($out, 0, 180));
-                    preg_match_all('/^Inst\s+([^\s]+)/m', $out, $match);
-                    $names = array_values(array_unique($match[1]));
-                    $this->SetValue('Feedback', $ip.': '.count($names).' mögliche Paketupdates (APT-Listen): '.($names ? implode(', ', array_slice($names, 0, 15)) : 'keine').'. Es wurde nichts installiert.');
+                    [$ok, $out] = $this->run('LC_ALL=C apt-get -s upgrade', $remote, $ip, (string)($item['user'] ?? 'pi'), (string)($item['key'] ?? ''));
+                    if (!$ok) throw new Exception(substr($out, 0, 220));
+                    $packages = [];
+                    foreach (explode("\n", $out) as $line) {
+                        if (!preg_match('/^Inst\s+([^\s]+)(.*)$/', $line, $matches)) continue;
+                        $package = substr($matches[1], 0, 100);
+                        $rest = $matches[2];
+                        $installed = '';
+                        $candidate = '';
+                        if (preg_match('/\[([^\]]+)\]/', $rest, $v)) $installed = $v[1];
+                        if (preg_match('/\(([^\s)]+)/', $rest, $v)) $candidate = $v[1];
+                        $packages[$package] = [
+                            'name' => $package,
+                            'installed' => substr($installed, 0, 80),
+                            'candidate' => substr($candidate, 0, 80)
+                        ];
+                    }
+                    $packages = array_values($packages);
+                    $this->SetValue('Feedback', $ip.': '.count($packages).' installierbare APT-Pakete laut vorhandenen Listen. Keine Installation.');
+                    $this->pushUI();
+                    $this->UpdateVisualizationValue(json_encode([
+                        'updateReport' => [
+                            'ip' => $ip, 'at' => date(DATE_ATOM),
+                            'packages' => $packages,
+                            'note' => 'Nur Simulation mit vorhandenen APT-Listen; bei veralteten Listen kann die Auswahl unvollständig sein.'
+                        ]
+                    ], JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE));
                 } catch (Throwable $e) {
                     $this->SetValue('Feedback', 'Updateprüfung: '.$e->getMessage());
+                    $this->pushUI();
                 }
-                $this->pushUI();
                 return;
             case 'UI.ServiceRestartPrepare':
                 try {
