@@ -3,7 +3,7 @@
 declare(strict_types=1);
 
 /**
- * Symcon Raspberry Monitor 0.7 – absichtlich ausschließlich lesend.
+ * Symcon Raspberry Monitor 2.0 – Diagnose, Vorprüfung; Installation deaktiviert.
  * Keine automatischen Netzwerkscans, Updates, Neustarts oder SSH-Schlüsseländerungen.
  */
 class RaspberryMonitor extends IPSModule
@@ -159,6 +159,47 @@ class RaspberryMonitor extends IPSModule
                     ], JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE));
                 } catch (Throwable $e) {
                     $this->SetValue('Feedback', 'Updateprüfung: '.$e->getMessage());
+                    $this->pushUI();
+                }
+                return;
+            case 'UI.UpdatePreflight':
+                try {
+                    $item = $this->deviceByIP((string)$Value);
+                    $ip = (string)$item['ip'];
+                    $remote = ($item['mode'] ?? 'ssh') !== 'local';
+                    $user = (string)($item['user'] ?? 'pi');
+                    $key = (string)($item['key'] ?? '');
+                    $runCheck = function(string $command) use ($remote,$ip,$user,$key): array {
+                        return $this->run($command,$remote,$ip,$user,$key);
+                    };
+                    [$diskOK,$disk] = $runCheck('df -Pk /');
+                    [$aptOK,$apt] = $runCheck('LC_ALL=C apt-get -s upgrade');
+                    [$locksOK,$locks] = $runCheck('sh -c "for f in /var/lib/dpkg/lock-frontend /var/lib/apt/lists/lock; do if command -v fuser >/dev/null 2>&1 && fuser \\$f >/dev/null 2>&1; then echo busy; fi; done"');
+                    $freeKB = 0;
+                    $lines = preg_split('/\r?\n/',trim($disk));
+                    if ($diskOK && count($lines)>1) {
+                        $cols = preg_split('/\s+/',trim($lines[count($lines)-1]));
+                        $freeKB = isset($cols[3]) ? (int)$cols[3] : 0;
+                    }
+                    $warn = [];
+                    if (!$diskOK || $freeKB < 1048576) $warn[] = 'Weniger als 1 GiB freier Speicher oder nicht prüfbar';
+                    if (!$aptOK) $warn[] = 'APT-Simulation fehlgeschlagen';
+                    if (!$locksOK || str_contains($locks, 'busy')) $warn[] = 'APT/DPKG möglicherweise durch anderen Prozess belegt';
+                    if (str_contains(strtolower((string)($item['name'] ?? '')), 'zigbee')) {
+                        [$gitOK,$git] = $runCheck('git -C /opt/zigbee2mqtt status --porcelain');
+                        if (!$gitOK) $warn[] = 'Zigbee2MQTT Git-Status nicht verfügbar';
+                        elseif (trim($git)!=='') $warn[] = 'Lokale Zigbee2MQTT-Änderungen: vor Update prüfen';
+                    }
+                    $report = [
+                        'ip'=>$ip,'freeGiB'=>round($freeKB/1048576,1),
+                        'aptSimulationOK'=>$aptOK,'warnings'=>$warn,
+                        'backup'=>'Nicht automatisch verifiziert',
+                        'ready'=>false,
+                        'message'=>'Nur Vorprüfung; Installation ist bewusst deaktiviert. Externes Backup und Wiederherstellung müssen geprüft werden.'
+                    ];
+                    $this->UpdateVisualizationValue(json_encode(['preflight'=>$report], JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE));
+                } catch (Throwable $e) {
+                    $this->SetValue('Feedback', 'Update-Vorprüfung: '.$e->getMessage());
                     $this->pushUI();
                 }
                 return;
