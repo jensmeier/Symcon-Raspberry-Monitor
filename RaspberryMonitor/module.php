@@ -375,7 +375,27 @@ class RaspberryMonitor extends IPSModule
         foreach ($items as $item) {
             $states[] = $this->readDevice(is_array($item) ? $item : []);
         }
-        $this->SetValue('StatusJSON', json_encode(['at' => date(DATE_ATOM), 'devices' => $states, 'restartEnabled' => $this->ReadPropertyBoolean('AllowRestart'), 'serviceRestartEnabled' => $this->ReadPropertyBoolean('AllowServiceRestart')], JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT));
+        // Begrenzte, interne Messhistorie: keine zusätzlichen Symcon-Variablen.
+        $history = json_decode($this->GetBuffer('MetricsHistory'), true);
+        if (!is_array($history)) $history = [];
+        $now = time();
+        foreach ($states as $deviceState) {
+            $ip = (string)($deviceState['ip'] ?? '');
+            if ($ip === '' || !($deviceState['online'] ?? false)) continue;
+            $tempRaw = str_replace(',', '.', (string)($deviceState['temp'] ?? ''));
+            $entry = ['t' => $now, 'temp' => is_numeric(preg_replace('/[^0-9.]/', '', $tempRaw)) ? (float)preg_replace('/[^0-9.]/', '', $tempRaw) : null,
+                'disk' => is_numeric(rtrim((string)($deviceState['disk'] ?? ''), '%')) ? (int)rtrim((string)$deviceState['disk'], '%') : null,
+                'ram' => is_numeric(rtrim((string)($deviceState['ram'] ?? ''), '%')) ? (int)rtrim((string)$deviceState['ram'], '%') : null];
+            $samples = $history[$ip] ?? [];
+            if (!is_array($samples)) $samples = [];
+            $last = end($samples);
+            if (!is_array($last) || ($now - (int)($last['t'] ?? 0)) >= 240) $samples[] = $entry;
+            $history[$ip] = array_slice($samples, -288);
+        }
+        $configured = array_column($states, 'ip');
+        $history = array_intersect_key($history, array_flip($configured));
+        $this->SetBuffer('MetricsHistory', json_encode($history, JSON_UNESCAPED_UNICODE));
+        $this->SetValue('StatusJSON', json_encode(['at' => date(DATE_ATOM), 'devices' => $states, 'history' => $history, 'restartEnabled' => $this->ReadPropertyBoolean('AllowRestart'), 'serviceRestartEnabled' => $this->ReadPropertyBoolean('AllowServiceRestart')], JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT));
         $lines = ['Raspberry Monitor 1.2 – '.date('d.m.Y H:i:s')];
         foreach ($states as $s) {
             $lines[] = sprintf('%s (%s): %s | OS: %s | Kernel: %s | CPU: %s | RAM: %s | HDD: %s | Updates: %s | Dienst: %s',
