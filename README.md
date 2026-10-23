@@ -1,9 +1,10 @@
-# Symcon Raspberry Monitor 0.8 (Entwicklungsstand)
+# Symcon Raspberry Monitor 0.9 (Entwicklungsstand)
 
 IP-Symcon 9.0: responsive, helle HTML-SDK-Oberfläche zur Überwachung von Linux-/Raspberry-Pi-Systemen.
 
 ## Funktionen
-- Systemkarten mit CPU-Temperatur, RAM, Festplatte, Debian, Kernel, APT-Paketupdateanzahl und Zigbee2MQTT-Dienststatus.
+- Systemkarten mit CPU-Temperatur, RAM, Festplatte, Debian, Kernel und APT-Paketupdateanzahl.
+- Kontextbezogene Anwendungserkennung: Symcon-Dienst auf dem lokalen Rechner; Zigbee2MQTT-Version, Zigbee-Dienst und Node.js auf dem Zigbee-Raspberry.
 - Geräte hinzufügen, Namen ändern, Geräte nur aus der Überwachung entfernen.
 - Begrenzte Suche nach offenen SSH-Ports im lokalen Netz.
 - Geräte manuell prüfen, alle Systeme auffrischen und APT-Updates **simulieren** (ohne Paketinstallation).
