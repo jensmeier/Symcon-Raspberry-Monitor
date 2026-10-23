@@ -1,0 +1,12 @@
+{
+  "id": "{9538B9B0-8E30-4F0D-9157-91A44AF37BB1}",
+  "name": "RaspberryMonitor",
+  "type": 3,
+  "vendor": "JZCG",
+  "aliases": ["Raspberry Überwachung"],
+  "url": "",
+  "parentRequirements": [],
+  "childRequirements": [],
+  "implemented": [],
+  "prefix": "SRM"
+}

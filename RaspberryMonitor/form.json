@@ -1,0 +1,15 @@
+{
+  "elements": [
+    {"type":"Label","caption":"Raspberry Monitor 0.1 – Geräte in der Liste eintragen; lokale und SSH-Geräte werden getrennt abgefragt."},
+    {"type":"List","name":"Devices","caption":"Überwachte Rechner","rowCount":5,"add":true,"delete":true,"columns":[
+      {"name":"name","caption":"Bezeichnung","width":"180px","add":"Neuer Raspberry","edit":{"type":"ValidationTextBox"}},
+      {"name":"ip","caption":"IP-Adresse","width":"160px","add":"192.168.178.90","edit":{"type":"ValidationTextBox"}},
+      {"name":"mode","caption":"Modus","width":"120px","add":"ssh","edit":{"type":"Select","options":[{"caption":"SSH","value":"ssh"},{"caption":"Lokal","value":"local"}]}},
+      {"name":"user","caption":"SSH-Nutzer","width":"120px","add":"pi","edit":{"type":"ValidationTextBox"}},
+      {"name":"key","caption":"Schlüsselpfad (auf Symcon)","width":"260px","add":"/root/.ssh/symcon_zigbee","edit":{"type":"ValidationTextBox"}}
+    ]},
+    {"type":"NumberSpinner","name":"Interval","caption":"Aktualisierung (Minuten)","minimum":1,"maximum":1440},
+    {"type":"Label","caption":"Zur manuellen IP-Prüfung: PHP-Konsole → SRM_ProbeIP(InstanzID, \"192.168.178.90\"). Keine automatische Netzwerksuche in 0.1."}
+  ],
+  "actions": [{"type":"Button","caption":"Alle Geräte jetzt prüfen","onClick":"SRM_Refresh($id);"}]
+}
