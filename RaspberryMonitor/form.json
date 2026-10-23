@@ -2,7 +2,7 @@
   "elements": [
     {
       "type": "Label",
-      "caption": "Raspberry Monitor 0.6 – Bedienung direkt in der HTML-SDK-Kachel. Geräte bleiben erhalten."
+      "caption": "Raspberry Monitor 0.8 – Bedienung direkt in der HTML-SDK-Kachel. Geräte bleiben erhalten."
     },
     {
       "type": "List",
