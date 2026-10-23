@@ -95,6 +95,11 @@
     {
       "type": "Label",
       "caption": "Updates prüfen liest nur APT-Listen. Updateinstallationen und Debian-Versionswechsel sind aus Sicherheitsgründen noch nicht freigeschaltet."
+    },
+    {
+      "type": "CheckBox",
+      "name": "AllowServiceRestart",
+      "caption": "Dienstneustarts nach Bestätigung erlauben (Remote: sudo-Berechtigung nur für Zigbee2MQTT; lokal: symcon)"
     }
   ],
   "actions": [
