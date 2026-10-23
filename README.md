@@ -1,4 +1,4 @@
-# Symcon Raspberry Monitor 1.6 (Entwicklungsstand)
+# Symcon Raspberry Monitor 1.7 (Entwicklungsstand)
 
 IP-Symcon 9.0: responsive, helle HTML-SDK-Oberfläche zur Überwachung von Linux-/Raspberry-Pi-Systemen.
 
@@ -39,6 +39,12 @@ IP-Symcon 9.0: responsive, helle HTML-SDK-Oberfläche zur Überwachung von Linux
 - Die ID und das Frischefenster sind in der Instanz einstellbar, falls die Bridge-Verknüpfung anders aufgebaut ist.
 - Zusätzlich bleibt die Journalauswertung aktiv. **Kein eigenständiger MQTT-CONNACK-Test:** Ein Bridge-Status kann von der tatsächlichen MQTT-Sitzung abweichen; die Auswertung bleibt als Statusindikator gekennzeichnet.
 - Es werden keine bestehenden Zigbee-Variablen verändert, keine neuen IDs erzeugt und keine Neustarts ausgeführt.
+
+## Neu in 1.7
+- Aktiver MQTT-3.1.1-Protokolltest über TCP CONNECT/CONNACK gegen den konfigurierten LAN-Broker (Standard 192.168.178.41:1029). Kein Publish, Subscribe oder Passwort.
+- Unterscheidet Broker nicht erreichbar, gültige CONNACK-Antwort, Anmeldung erforderlich und Protokollfehler.
+- Dieser Test bestätigt **nicht** die MQTT-Sitzung des Zigbee2MQTT-Clients. Bridge-Status und Journalauswertung bleiben daher separat.
+- IP und Port sind konfigurierbar. Kein Neustart, keine Updates, keine Passwortspeicherung.
 
 ## Funktionen
 - Systemkarten mit CPU-Temperatur, RAM, Festplatte, Debian, Kernel und APT-Paketupdateanzahl.
