@@ -1,4 +1,4 @@
-# Symcon Raspberry Monitor 1.8 (Entwicklungsstand)
+# Symcon Raspberry Monitor 2.0 – Integrationsstand
 
 IP-Symcon 9.0: responsive, helle HTML-SDK-Oberfläche zur Überwachung von Linux-/Raspberry-Pi-Systemen.
 
@@ -51,6 +51,25 @@ IP-Symcon 9.0: responsive, helle HTML-SDK-Oberfläche zur Überwachung von Linux
 - Erfasst ausschließlich Zustandswechsel: Online/Offline, neu auftretende Warnungen und deren Behebung.
 - Begrenzung auf die letzten 100 Ereignisse im Modul-Puffer. Kein wiederholtes Logging identischer Warnungen bei jeder Prüfung.
 - Keine neuen Variablen. Kein automatisches Installieren oder Neustarten. Modul-Puffer ist keine dauerhafte Audit-Datenbank; seine Beständigkeit muss in der jeweiligen Symcon-Installation geprüft werden.
+
+## Version 1.9 + 2.0 (gemeinsam)
+- **1.9:** Eine lesende Sicherheits-Vorprüfung für Debian-Paketupdates: freier Speicher, APT-Simulation, Paketverwaltungssperren und bei Zigbee lokalen Git-Status prüfen.
+- **2.0:** Vorprüfungsfenster direkt im hellen HTML-SDK-Update-Dialog. Diagnose und Geräteverwaltung bleiben erhalten, Instanz- und Modul-IDs bleiben unverändert.
+- Die Vorprüfung setzt `ready=false`, solange Backups nicht nachweislich geprüft sind. **Es gibt keine Installationsfunktion**. Auch das Linux-Versionsupgrade bleibt ausgeschlossen.
+- Geräte werden **nicht** neugestartet, aktualisiert oder verändert, um die Vorprüfung durchzuführen.
+
+### Nicht als fertig zu betrachten
+- Ein vollständiger automatisierter Backup-/Restore-Test sowie die eigentliche Updateinstallation.
+- Verlässliche Recovery-Steuerung bei fehlgeschlagenen Updates.
+- Live-End-to-End-Test in der Symcon-Instanz.
+- Eigenständiger MQTT-Client-Verbindungsnachweis (Broker-CONNACK ist nur Broker-Test).
+
+### Testvorgehen
+1. Bestehende Modulbibliothek aktualisieren, **keine zweite Instanz** erstellen.
+2. Bei jedem Gerät „Updates prüfen“ öffnen: Paketnamen und Versionsnummern vergleichen.
+3. Im Dialog „Sicherheitsprüfung“ aufrufen: Speicher, Git-Hinweise und Backup-Status kontrollieren.
+4. Prüfen, dass es **keine Schaltfläche zur Installation** gibt und keine Dienste neu gestartet werden.
+5. Nach Aktualisierung Geräteliste, MQTT-Status, Verlaufsdiagramme und Ereignisverlauf prüfen.
 
 ## Funktionen
 - Systemkarten mit CPU-Temperatur, RAM, Festplatte, Debian, Kernel und APT-Paketupdateanzahl.
