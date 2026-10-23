@@ -2,7 +2,7 @@
   "elements": [
     {
       "type": "Label",
-      "caption": "Raspberry Monitor 0.8 – Bedienung direkt in der HTML-SDK-Kachel. Geräte bleiben erhalten."
+      "caption": "Raspberry Monitor 1.6 – bestehende Geräte bleiben erhalten"
     },
     {
       "type": "List",
@@ -100,6 +100,19 @@
       "type": "CheckBox",
       "name": "AllowServiceRestart",
       "caption": "Dienstneustarts nach Bestätigung erlauben (Remote: sudo-Berechtigung nur für Zigbee2MQTT; lokal: symcon)"
+    },
+    {
+      "type": "NumberSpinner",
+      "name": "ZigbeeBridgeStatusID",
+      "caption": "Bestehende Zigbee2MQTT Bridge Status-Variable (Boolean, derzeit 27220)",
+      "minimum": 0
+    },
+    {
+      "type": "NumberSpinner",
+      "name": "BridgeFreshnessMinutes",
+      "caption": "Maximales Alter einer Bridge-Statusaktualisierung (Minuten)",
+      "minimum": 1,
+      "maximum": 1440
     }
   ],
   "actions": [
