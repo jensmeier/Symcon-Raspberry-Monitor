@@ -381,14 +381,14 @@ class RaspberryMonitor extends IPSModule
         $remote = ($device['mode'] ?? 'ssh') !== 'local';
         $user = (string)($device['user'] ?? 'pi');
         $key = (string)($device['key'] ?? '');
-        $state = ['name' => $name, 'ip' => $ip, 'online' => false, 'os' => '–', 'kernel' => '–', 'temp' => '–', 'ram' => '–', 'disk' => '–', 'updates' => '–', 'service' => '–', 'error' => ''];
+        $state = ['name' => $name, 'ip' => $ip, 'online' => false, 'os' => '–', 'kernel' => '–', 'temp' => '–', 'ram' => '–', 'disk' => '–', 'updates' => '–', 'service' => '–', 'node' => '–', 'zigbeeVersion' => '–', 'symconService' => '–', 'error' => ''];
         if (!filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) { $state['error'] = 'Ungültige IPv4-Adresse'; return $state; }
         if ($remote && (!preg_match('/^[a-z_][a-z0-9_-]{0,31}$/', $user) || !preg_match('#^/[a-zA-Z0-9/_\.\-]+$#', $key))) {
             $state['error'] = 'SSH-Nutzer oder Schlüsselpfad ungültig'; return $state;
         }
         // Genau ein kurzer SSH-Aufruf pro Raspberry; Ausgabe auf feste Zeilenzahl beschränkt.
         $read = <<<'SH'
-LC_ALL=C; echo "OS=$(sed -n 's/^PRETTY_NAME=//p' /etc/os-release | head -n1 | tr -d '"')"; echo "KERNEL=$(uname -r)"; echo "TEMP=$(cat /sys/class/thermal/thermal_zone0/temp 2>/dev/null || echo NA)"; echo "RAM=$(awk '/MemTotal:/ {t=$2} /MemAvailable:/ {a=$2} END {if(t>0) printf "%.0f%%",(t-a)*100/t; else print "NA"}' /proc/meminfo)"; echo "DISK=$(df -P / | awk 'NR==2 {print $5}')"; echo "UPDATES=$(LC_ALL=C apt-get -s upgrade 2>/dev/null | awk '/^Inst / {n++} END {print n+0}')"; echo "SERVICE=$(systemctl is-active zigbee2mqtt 2>/dev/null || true)"
+LC_ALL=C; echo "OS=$(sed -n 's/^PRETTY_NAME=//p' /etc/os-release | head -n1 | tr -d '"')"; echo "KERNEL=$(uname -r)"; echo "TEMP=$(cat /sys/class/thermal/thermal_zone0/temp 2>/dev/null || echo NA)"; echo "RAM=$(awk '/MemTotal:/ {t=$2} /MemAvailable:/ {a=$2} END {if(t>0) printf "%.0f%%",(t-a)*100/t; else print "NA"}' /proc/meminfo)"; echo "DISK=$(df -P / | awk 'NR==2 {print $5}')"; echo "UPDATES=$(LC_ALL=C apt-get -s upgrade 2>/dev/null | awk '/^Inst / {n++} END {print n+0}')"; echo "SERVICE=$(systemctl is-active zigbee2mqtt 2>/dev/null || true)"; echo "SYMD=$(systemctl is-active symcon 2>/dev/null || true)"; echo "NODE=$(node -v 2>/dev/null || true)"; echo "Z2MV=$(grep -m 1 \"\\\"version\\\"\" /opt/zigbee2mqtt/package.json 2>/dev/null | cut -d \"\\\"\" -f 4)"
 SH;
         [$ok, $output] = $this->run($read, $remote, $ip, $user, $key);
         if (!$ok) { $state['error'] = substr($output, 0, 220); return $state; }
@@ -403,6 +403,9 @@ SH;
             if ($k === 'DISK') $state['disk'] = $v;
             if ($k === 'UPDATES') $state['updates'] = $v.' (APT-Listen)';
             if ($k === 'SERVICE') $state['service'] = $v;
+            if ($k === 'SYMD') $state['symconService'] = $v;
+            if ($k === 'NODE') $state['node'] = $v;
+            if ($k === 'Z2MV') $state['zigbeeVersion'] = $v;
             if ($k === 'TEMP' && is_numeric($v)) $state['temp'] = number_format(((float)$v) / 1000, 1, ',', '.').' °C';
         }
         return $state;
