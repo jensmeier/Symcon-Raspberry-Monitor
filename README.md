@@ -1,4 +1,4 @@
-# Symcon Raspberry Monitor 1.3 (Entwicklungsstand)
+# Symcon Raspberry Monitor 1.4 (Entwicklungsstand)
 
 IP-Symcon 9.0: responsive, helle HTML-SDK-Oberfläche zur Überwachung von Linux-/Raspberry-Pi-Systemen.
 
@@ -18,6 +18,11 @@ IP-Symcon 9.0: responsive, helle HTML-SDK-Oberfläche zur Überwachung von Linux
 - Messwerte im internen Modul-Puffer: maximal 288 Punkte je Gerät, mindestens vier Minuten zwischen Messpunkten, maximal etwa 24 Stunden bei einem 5-Minuten-Intervall.
 - Beim Modulneustart kann die Pufferhistorie verloren gehen; für dauerhafte Archivierung ist eine gesonderte Persistenz nötig.
 - Keine zusätzlichen Symcon-Variablen, Updates oder Neustarts.
+
+## Neu in 1.4
+- Schaltfläche **Updates prüfen** öffnet eine eigene übersichtliche Liste mit Paketnamen, installierter und angebotener Version, soweit APT diese Informationen liefert.
+- APT-Upgrade wird ausschließlich **simuliert**; Paketlisten werden dabei nicht aktualisiert und Pakete nicht installiert.
+- Ausgabe im HTML-SDK-Dialog; keine zusätzlichen Symcon-Variablen.
 
 ## Funktionen
 - Systemkarten mit CPU-Temperatur, RAM, Festplatte, Debian, Kernel und APT-Paketupdateanzahl.
