@@ -79,6 +79,7 @@ class RaspberryMonitor extends IPSModule
         $data['restartEnabled'] = $this->ReadPropertyBoolean('AllowRestart');
         $data['serviceRestartEnabled'] = $this->ReadPropertyBoolean('AllowServiceRestart');
         $data['restartJobs'] = json_decode($this->GetBuffer('RestartJobs'), true) ?: [];
+        $data['events'] = array_reverse(json_decode($this->GetBuffer('MonitorEvents'), true) ?: []);
         $this->UpdateVisualizationValue(json_encode($data, JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE));
     }
 
@@ -529,6 +530,37 @@ class RaspberryMonitor extends IPSModule
         }
         unset($state);
         $brokerCheck = $this->probeMQTTBroker($this->ReadPropertyString('MQTTBrokerIP'), $this->ReadPropertyInteger('MQTTBrokerPort'));
+        // Zustandswechsel nur bei Änderung protokollieren: höchstens 100 Meldungen.
+        $eventLog = json_decode($this->GetBuffer('MonitorEvents'), true);
+        if (!is_array($eventLog)) $eventLog = [];
+        $previous = json_decode($this->GetBuffer('MonitorLastStates'), true);
+        if (!is_array($previous)) $previous = [];
+        $current = [];
+        foreach ($states as $deviceState) {
+            $ip = (string)($deviceState['ip'] ?? '');
+            if ($ip === '') continue;
+            $online = (bool)($deviceState['online'] ?? false);
+            $warnings = array_values(array_unique(array_map('strval', $deviceState['warnings'] ?? [])));
+            sort($warnings);
+            $snapshot = ['online' => $online, 'warnings' => $warnings];
+            $current[$ip] = $snapshot;
+            if (!isset($previous[$ip])) continue; // Anfangszustand ist kein Alarm.
+            if ($previous[$ip]['online'] !== $online) {
+                $eventLog[] = ['time'=>date(DATE_ATOM), 'ip'=>$ip,
+                    'level'=>$online ? 'info' : 'error',
+                    'text'=>$online ? 'Wieder erreichbar' : 'Nicht erreichbar'];
+            }
+            $before = $previous[$ip]['warnings'] ?? [];
+            foreach (array_diff($warnings, $before) as $warning) {
+                $eventLog[] = ['time'=>date(DATE_ATOM), 'ip'=>$ip, 'level'=>'warning', 'text'=>$warning];
+            }
+            foreach (array_diff($before, $warnings) as $warning) {
+                $eventLog[] = ['time'=>date(DATE_ATOM), 'ip'=>$ip, 'level'=>'info', 'text'=>'Behoben: '.$warning];
+            }
+        }
+        $this->SetBuffer('MonitorLastStates', json_encode($current, JSON_UNESCAPED_UNICODE));
+        $eventLog = array_slice($eventLog, -100);
+        $this->SetBuffer('MonitorEvents', json_encode($eventLog, JSON_UNESCAPED_UNICODE));
         // Begrenzte, interne Messhistorie: keine zusätzlichen Symcon-Variablen.
         $history = json_decode($this->GetBuffer('MetricsHistory'), true);
         if (!is_array($history)) $history = [];
@@ -549,7 +581,7 @@ class RaspberryMonitor extends IPSModule
         $configured = array_column($states, 'ip');
         $history = array_intersect_key($history, array_flip($configured));
         $this->SetBuffer('MetricsHistory', json_encode($history, JSON_UNESCAPED_UNICODE));
-        $this->SetValue('StatusJSON', json_encode(['at' => date(DATE_ATOM), 'devices' => $states, 'history' => $history, 'restartJobs' => $restartJobs, 'brokerMQTT' => $brokerCheck, 'restartEnabled' => $this->ReadPropertyBoolean('AllowRestart'), 'serviceRestartEnabled' => $this->ReadPropertyBoolean('AllowServiceRestart')], JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT));
+        $this->SetValue('StatusJSON', json_encode(['at' => date(DATE_ATOM), 'devices' => $states, 'history' => $history, 'restartJobs' => $restartJobs, 'brokerMQTT' => $brokerCheck, 'events' => array_reverse($eventLog), 'restartEnabled' => $this->ReadPropertyBoolean('AllowRestart'), 'serviceRestartEnabled' => $this->ReadPropertyBoolean('AllowServiceRestart')], JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT));
         $lines = ['Raspberry Monitor 1.2 – '.date('d.m.Y H:i:s')];
         foreach ($states as $s) {
             $lines[] = sprintf('%s (%s): %s | OS: %s | Kernel: %s | CPU: %s | RAM: %s | HDD: %s | Updates: %s | Dienst: %s',
