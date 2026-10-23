@@ -18,6 +18,7 @@ class RaspberryMonitor extends IPSModule
         ]));
         $this->RegisterPropertyInteger('Interval', 5);
         $this->RegisterPropertyBoolean('AllowRestart', false);
+        $this->RegisterPropertyBoolean('AllowServiceRestart', false);
         $this->RegisterPropertyInteger('ScanStart', 1);
         $this->RegisterTimer('RefreshTimer', 0, 'SRM_Refresh($_IPS[\'TARGET\']);');
         $this->RegisterVariableString('Overview', 'Raspberry Übersicht', '~HTMLBox');
@@ -72,6 +73,7 @@ class RaspberryMonitor extends IPSModule
         $data["feedback"] = $this->GetValue("Feedback");
         $data["found"] = $this->GetValue("Found");
         $data['restartEnabled'] = $this->ReadPropertyBoolean('AllowRestart');
+        $data['serviceRestartEnabled'] = $this->ReadPropertyBoolean('AllowServiceRestart');
         $this->UpdateVisualizationValue(json_encode($data, JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE));
     }
 
@@ -130,6 +132,40 @@ class RaspberryMonitor extends IPSModule
                     $this->SetValue('Feedback', $ip.': '.count($names).' mögliche Paketupdates (APT-Listen): '.($names ? implode(', ', array_slice($names, 0, 15)) : 'keine').'. Es wurde nichts installiert.');
                 } catch (Throwable $e) {
                     $this->SetValue('Feedback', 'Updateprüfung: '.$e->getMessage());
+                }
+                $this->pushUI();
+                return;
+            case 'UI.ServiceRestartPrepare':
+                try {
+                    if (!$this->ReadPropertyBoolean('AllowServiceRestart')) throw new Exception('Dienstneustarts sind in der Instanzkonfiguration gesperrt.');
+                    $ip = (string)$Value;
+                    $item = $this->deviceByIP($ip);
+                    $service = ($item['mode'] ?? 'ssh') === 'local' ? 'symcon' : 'zigbee2mqtt';
+                    $ticket = bin2hex(random_bytes(16));
+                    $this->SetBuffer('ServiceRestartTicket', json_encode(['ip'=>$ip,'service'=>$service,'token'=>$ticket,'expires'=>time()+60]));
+                    $this->UpdateVisualizationValue(json_encode(['serviceTicket'=>$ticket,'serviceIP'=>$ip,'serviceName'=>$service], JSON_UNESCAPED_UNICODE));
+                } catch (Throwable $e) {
+                    $this->SetValue('Feedback', 'Dienstneustart: '.$e->getMessage());
+                    $this->pushUI();
+                }
+                return;
+            case 'UI.ServiceRestartConfirm':
+                try {
+                    if (!$this->ReadPropertyBoolean('AllowServiceRestart')) throw new Exception('Dienstneustarts gesperrt.');
+                    $payload = json_decode((string)$Value, true, 8, JSON_THROW_ON_ERROR);
+                    $ticket = json_decode($this->GetBuffer('ServiceRestartTicket'), true);
+                    $this->SetBuffer('ServiceRestartTicket', '');
+                    if (!is_array($ticket) || !hash_equals((string)$ticket['token'], (string)($payload['token'] ?? '')) || $ticket['ip'] !== ($payload['ip'] ?? '') || time() > (int)$ticket['expires']) throw new Exception('Bestätigung abgelaufen oder ungültig.');
+                    $ip = (string)$ticket['ip'];
+                    $item = $this->deviceByIP($ip);
+                    $remote = ($item['mode'] ?? 'ssh') !== 'local';
+                    $cmd = $remote
+                        ? 'sudo -n /usr/bin/systemctl restart zigbee2mqtt'
+                        : '/usr/bin/systemd-run --on-active=3s --unit=srm-symcon-'.time().' /usr/bin/systemctl restart symcon';
+                    [$ok, $out] = $this->run($cmd, $remote, $ip, (string)($item['user'] ?? 'pi'), (string)($item['key'] ?? ''));
+                    $this->SetValue('Feedback', $ok ? 'Dienstneustartkommando übergeben: '.$ticket['service'].'. Erfolg nach Wiederverbindung noch prüfen.' : 'Dienstneustart fehlgeschlagen: '.substr($out,0,180));
+                } catch (Throwable $e) {
+                    $this->SetValue('Feedback', 'Dienstneustart: '.$e->getMessage());
                 }
                 $this->pushUI();
                 return;
@@ -339,7 +375,7 @@ class RaspberryMonitor extends IPSModule
         foreach ($items as $item) {
             $states[] = $this->readDevice(is_array($item) ? $item : []);
         }
-        $this->SetValue('StatusJSON', json_encode(['at' => date(DATE_ATOM), 'devices' => $states, 'restartEnabled' => $this->ReadPropertyBoolean('AllowRestart')], JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT));
+        $this->SetValue('StatusJSON', json_encode(['at' => date(DATE_ATOM), 'devices' => $states, 'restartEnabled' => $this->ReadPropertyBoolean('AllowRestart'), 'serviceRestartEnabled' => $this->ReadPropertyBoolean('AllowServiceRestart')], JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT));
         $lines = ['Raspberry Monitor 0.5 – '.date('d.m.Y H:i:s')];
         foreach ($states as $s) {
             $lines[] = sprintf('%s (%s): %s | OS: %s | Kernel: %s | CPU: %s | RAM: %s | HDD: %s | Updates: %s | Dienst: %s',
