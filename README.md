@@ -1,19 +1,28 @@
-# Symcon Raspberry Monitor 0.7
+# Symcon Raspberry Monitor 0.8 (Entwicklungsstand)
 
-IP-Symcon 9.0 HTML-SDK – helle Systemverwaltung im Stil der Symcon-Kachelvisualisierung.
+IP-Symcon 9.0: responsive, helle HTML-SDK-Oberfläche zur Überwachung von Linux-/Raspberry-Pi-Systemen.
 
-## Änderungen
-- Helles Dashboard mit zwei responsiven Systemkarten.
-- Gerät direkt in der Oberfläche verwalten (umbenennen, Status per SSH neu prüfen, aus Überwachung entfernen).
-- Raspberry über IP hinzufügen und begrenzte SSH-Port-Suche.
-- Bestehende Instanz, Geräte-Property `Devices` und Modulkennungen bleiben erhalten.
-- Beim Entfernen werden **keine Dateien oder Geräte auf dem Raspberry gelöscht**.
+## Funktionen
+- Systemkarten mit CPU-Temperatur, RAM, Festplatte, Debian, Kernel, APT-Paketupdateanzahl und Zigbee2MQTT-Dienststatus.
+- Geräte hinzufügen, Namen ändern, Geräte nur aus der Überwachung entfernen.
+- Begrenzte Suche nach offenen SSH-Ports im lokalen Netz.
+- Geräte manuell prüfen, alle Systeme auffrischen und APT-Updates **simulieren** (ohne Paketinstallation).
+- Helles Design mit Abstand zur von Symcon eingeblendeten Kachelüberschrift.
+- Neustartvorgänge mit expliziter administrativer Opt-in-Einstellung, einmaligem Token und 60 Sekunden Ablaufzeit.
+- Bestehende Geräte und Instanz werden übernommen; keine neuen Bedien-Variablen pro Schaltfläche.
 
-## Update
-Bestehende IP-Symcon Modulbibliothek auf GitHub aktualisieren, vorhandene Instanz weiterverwenden, Moduländerungen übernehmen. Die Kachel in der Visualisierung möglichst breit anordnen.
+## Installation
+Bestehende Modulbibliothek in IP-Symcon auf GitHub-Stand aktualisieren und die vorhandene Instanz behalten.
+In der Kachelvisualisierung breite Darstellung wählen.
 
-## Sicherheit
-Lesender Systemstatus. Neustarts und Updateinstallationen bleiben deaktiviert. SSH benötigt vorher eingerichtete Schlüssel. Netzwerksuche weist nur erreichbare SSH-Ports nach, nicht Gerätetyp oder gültige Anmeldung. Zugang zur Visualisierung einschränken.
+## Sicherheitsstatus
+**Standardmäßig sind Neustarts gesperrt.** Unter Instanzkonfiguration `AllowRestart` kann ein Administrator sie aktivieren, nachdem eingeschränkte sudo-Berechtigungen und Rückfallweg getestet wurden. Eine Bestätigung in der Visualisierung ist zusätzlich erforderlich. Ein angenommener Neustartbefehl ist noch kein Beweis, dass das Ziel wieder gestartet ist.
 
-## Einschränkungen
-Die grafische Oberfläche nutzt das HTML-SDK. Bei sehr kleinen Kachelbreiten erfolgt eine einspaltige Darstellung. Die JavaScript-Dialoge benötigen einen Test in deiner echten Symcon-Visualisierung. Kein vollautomatischer SSH-Onboarding-Assistent, keine geprüfte MQTT-Anmeldung und keine Updateinstallation in dieser Version.
+**Paketupdates werden in dieser Version nicht installiert.** Kein Debian-11-auf-13-Upgrade.
+Remote-SSH-Verbindung benötigt vorher eingerichteten SSH-Schlüssel mit geprüftem Hostschlüssel. Geräte aus der Überwachung zu entfernen löscht keine Daten auf dem Zielgerät.
+
+## Noch nicht implementiert / zu prüfen
+- Echte MQTT-Protokollprüfung (statt bloß TCP-Port).
+- Sichere Updateinstallation mit getestetem Backup/Rollback, Jobs und Erfolgskontrolle.
+- Dienstspezifische Neustarts, SSH-Onboarding und echte Geräteidentifikation.
+- End-to-End-Test auf dem laufenden Symcon 9.0.
