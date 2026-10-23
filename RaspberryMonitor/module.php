@@ -174,7 +174,7 @@ class RaspberryMonitor extends IPSModule
                     };
                     [$diskOK,$disk] = $runCheck('df -Pk /');
                     [$aptOK,$apt] = $runCheck('LC_ALL=C apt-get -s upgrade');
-                    [$locksOK,$locks] = $runCheck('sh -c "for f in /var/lib/dpkg/lock-frontend /var/lib/apt/lists/lock; do if command -v fuser >/dev/null 2>&1 && fuser \\$f >/dev/null 2>&1; then echo busy; fi; done"');
+                    [$locksOK,$locks] = $runCheck('fuser /var/lib/dpkg/lock-frontend /var/lib/apt/lists/lock 2>/dev/null || true');
                     $freeKB = 0;
                     $lines = preg_split('/\r?\n/',trim($disk));
                     if ($diskOK && count($lines)>1) {
@@ -184,7 +184,7 @@ class RaspberryMonitor extends IPSModule
                     $warn = [];
                     if (!$diskOK || $freeKB < 1048576) $warn[] = 'Weniger als 1 GiB freier Speicher oder nicht prüfbar';
                     if (!$aptOK) $warn[] = 'APT-Simulation fehlgeschlagen';
-                    if (!$locksOK || str_contains($locks, 'busy')) $warn[] = 'APT/DPKG möglicherweise durch anderen Prozess belegt';
+                    if (!$locksOK || trim($locks) !== '') $warn[] = 'APT/DPKG möglicherweise durch anderen Prozess belegt';
                     if (str_contains(strtolower((string)($item['name'] ?? '')), 'zigbee')) {
                         [$gitOK,$git] = $runCheck('git -C /opt/zigbee2mqtt status --porcelain');
                         if (!$gitOK) $warn[] = 'Zigbee2MQTT Git-Status nicht verfügbar';
