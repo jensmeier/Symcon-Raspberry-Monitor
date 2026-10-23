@@ -1,4 +1,4 @@
-# Symcon Raspberry Monitor 1.5 (Entwicklungsstand)
+# Symcon Raspberry Monitor 1.6 (Entwicklungsstand)
 
 IP-Symcon 9.0: responsive, helle HTML-SDK-Oberfläche zur Überwachung von Linux-/Raspberry-Pi-Systemen.
 
@@ -31,6 +31,14 @@ IP-Symcon 9.0: responsive, helle HTML-SDK-Oberfläche zur Überwachung von Linux
 - Status je Gerät in der vorhandenen HTML-SDK-Kachel; keine neuen Variablen.
 - Die Nachprüfung erfolgt mit den normalen Modul-Aktualisierungen (standardmäßig alle fünf Minuten). Für schnellere Rückmeldung muss das Überwachungsintervall reduziert werden.
 - Die bisherigen Neustart-Freigaben bleiben standardmäßig ausgeschaltet. Kein automatischer Neustart oder Update wird ausgelöst.
+
+## Neu in 1.6 – vorhandene Zigbee2MQTT-Bridge
+- Die **bereits bestehende** Status-Variable der Zigbee2MQTT-Bridge wird ausgelesen; Standard-ID `27220` aus der vorhandenen Symcon-Konfiguration (Boolean „Status / OK“).
+- Der Zeitpunkt `VariableUpdated` wird geprüft. Frische Bridge-Meldungen (standardmäßig innerhalb zehn Minuten) können als „Bridge meldet OK“ oder „Bridge meldet Störung“ erscheinen.
+- Alte oder nie aktualisierte Statuswerte werden **nicht** als erfolgreiche MQTT-Verbindung ausgegeben.
+- Die ID und das Frischefenster sind in der Instanz einstellbar, falls die Bridge-Verknüpfung anders aufgebaut ist.
+- Zusätzlich bleibt die Journalauswertung aktiv. **Kein eigenständiger MQTT-CONNACK-Test:** Ein Bridge-Status kann von der tatsächlichen MQTT-Sitzung abweichen; die Auswertung bleibt als Statusindikator gekennzeichnet.
+- Es werden keine bestehenden Zigbee-Variablen verändert, keine neuen IDs erzeugt und keine Neustarts ausgeführt.
 
 ## Funktionen
 - Systemkarten mit CPU-Temperatur, RAM, Festplatte, Debian, Kernel und APT-Paketupdateanzahl.
