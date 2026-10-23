@@ -2,7 +2,7 @@
   "elements": [
     {
       "type": "Label",
-      "caption": "Raspberry Monitor 0.1 – Geräte in der Liste eintragen; lokale und SSH-Geräte werden getrennt abgefragt."
+      "caption": "Raspberry Monitor 0.6 – Bedienung direkt in der HTML-SDK-Kachel. Geräte bleiben erhalten."
     },
     {
       "type": "List",
@@ -85,7 +85,7 @@
     },
     {
       "type": "Label",
-      "caption": "Zur manuellen IP-Prüfung: PHP-Konsole → SRM_ProbeIP(InstanzID, \"192.168.178.90\"). Keine automatische Netzwerksuche in 0.1."
+      "caption": "Die HTML-SDK-Kachel bietet Hinzufügen, Prüfen und eine begrenzte SSH-Netzwerksuche. Neustarts/Updates sind noch gesperrt."
     }
   ],
   "actions": [

@@ -11,6 +11,7 @@ class RaspberryMonitor extends IPSModule
     public function Create()
     {
         parent::Create();
+        $this->SetVisualizationType(1);
         $this->RegisterPropertyString('Devices', json_encode([
             ['name' => 'IP-Symcon', 'ip' => '192.168.178.41', 'mode' => 'local', 'user' => '', 'key' => ''],
             ['name' => 'Zigbee-Raspberry', 'ip' => '192.168.178.90', 'mode' => 'ssh', 'user' => 'pi', 'key' => '/root/.ssh/symcon_zigbee']
@@ -32,11 +33,19 @@ class RaspberryMonitor extends IPSModule
         }
         IPS_SetHidden($this->GetIDForIdent('StatusJSON'), true);
         IPS_SetHidden($this->GetIDForIdent('Details'), true);
+        foreach (['Overview','NewIP','AddIP','RefreshNow','ScanNow','Feedback','Found'] as $ident) {
+            IPS_SetHidden($this->GetIDForIdent($ident), true);
+        }
     }
 
     public function ApplyChanges()
     {
         parent::ApplyChanges();
+        // Auch bestehende Instanzen aus 0.5 entschlacken; niemals löschen.
+        foreach (['Overview','Details','StatusJSON','NewIP','AddIP','RefreshNow','ScanNow','Feedback','Found'] as $ident) {
+            $id = @$this->GetIDForIdent($ident);
+            if ($id > 0) IPS_SetHidden($id, true);
+        }
         // Symcon 9: HTML-Inhalt statt Link/Webseite darstellen.
         IPS_SetVariableCustomPresentation($this->GetIDForIdent('Overview'), [
             'PRESENTATION' => VARIABLE_PRESENTATION_WEB_CONTENT,
@@ -46,9 +55,49 @@ class RaspberryMonitor extends IPSModule
         $this->Refresh();
     }
 
+    public function GetVisualizationTile()
+    {
+        $file = __DIR__ . "/monitor.html";
+        $html = file_get_contents($file);
+        $data = $this->GetValue("StatusJSON");
+        if (!is_string($data) || json_decode($data, true) === null) $data = "{}";
+        $initial = json_encode(json_decode($data, true), JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT);
+        return str_replace("__INITIAL_STATE__", $initial ?: "{}", $html);
+    }
+
+    private function pushUI(): void
+    {
+        $data = json_decode($this->GetValue("StatusJSON"), true);
+        $data["feedback"] = $this->GetValue("Feedback");
+        $data["found"] = $this->GetValue("Found");
+        $this->UpdateVisualizationValue(json_encode($data, JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE));
+    }
+
     public function RequestAction($Ident, $Value)
     {
         switch ($Ident) {
+            case 'UI.Refresh':
+                $this->Refresh();
+                $this->SetValue('Feedback', 'Alle Systeme aktualisiert.');
+                $this->pushUI();
+                return;
+            case 'UI.Add':
+                try {
+                    $this->AddDevice(trim((string)$Value));
+                } catch (Throwable $e) {
+                    $this->SetValue('Feedback', 'Gerät hinzufügen: '.$e->getMessage());
+                }
+                $this->pushUI();
+                return;
+            case 'UI.Scan':
+                try {
+                    $this->ScanNetwork();
+                } catch (Throwable $e) {
+                    $this->SetValue('Feedback', 'Netzwerksuche: '.$e->getMessage());
+                }
+                $this->pushUI();
+                return;
+
             case 'NewIP':
                 $this->SetValue('NewIP', trim((string)$Value));
                 return;
@@ -147,6 +196,7 @@ class RaspberryMonitor extends IPSModule
         }
         $this->SetValue('Found', $found ? implode(', ', $found) : 'Keine offenen SSH-Ports im Suchbereich.');
         $this->SetValue('Feedback', 'SSH-Port-Suche '.$base.$start.' bis '.$base.($start+31).' abgeschlossen. Ein gefundener Port beweist keinen Raspberry.');
+        $this->pushUI();
     }
 
     public function Refresh(): void
@@ -168,6 +218,7 @@ class RaspberryMonitor extends IPSModule
         }
         $this->SetValue('Details', implode("\n", $lines));
         $this->SetValue('Overview', $this->render($states));
+        $this->pushUI();
     }
 
     /** Prüft nur TCP-Port 22. Keine Aussage über gültige SSH-Zugangsdaten. */

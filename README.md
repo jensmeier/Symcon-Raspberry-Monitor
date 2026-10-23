@@ -1,22 +1,20 @@
-# Symcon Raspberry Monitor v0.5 – Testversion
+# Symcon Raspberry Monitor 0.6
 
-**Nur lesender Betrieb**: keine Neustarts und keine Updateinstallation. Das Modul arbeitet ohne Variable 17543. Es erstellt seine benötigten Status- und Bedienvariablen selbst.
+IP-Symcon 9.0: native HTML-SDK-Instanzkachel mit responsiven Geräten, IP-Hinzufügen, manuell begrenzter SSH-Port-Suche, SSH-Systemstatus.
 
-## Installation / Aktualisierung
+## Upgrade
+Bestehende Modulinstanz und Geräte-Property `Devices` bleiben erhalten. Keine zweite Instanz erzeugen. Die alten Bedien-/HTMLBox-Variablen werden **ausgeblendet, nicht gelöscht**. IP-Symcon Visualisierung: Instanzkachel "Raspberry Überwachung" anzeigen und auf volle Breite stellen.
 
-1. Dateien in das bisherige GitHub-Repository übernehmen und committen. **Die GUIDs in `library.json` und `module.json` bleiben gleich**, damit die bestehende Instanz erhalten bleibt.
-2. In der IP-Symcon Modulverwaltung das Modul aktualisieren und die Instanzkonfiguration **Übernehmen**.
-3. In der Visualisierung die Variable **Raspberry Übersicht** möglichst breit platzieren; daneben bzw. darunter die Modulvariablen **Neue Raspberry-IP**, **Gerät hinzufügen**, **Jetzt aktualisieren**, **Netzwerk suchen**, **Gefundene SSH-Geräte**, **Bedienhinweis** hinzufügen.
-4. Neue IP eintragen und „Gerät hinzufügen“ auf EIN stellen. Der Schalter wird automatisch zurückgesetzt. In der Instanzkonfiguration lassen sich Name, Nutzer und Schlüsselpfad ändern.
+## Funktionen
+- Zwei oder mehr Rechner nebeneinander bei genügend Breite.
+- Neue IP über Dialog hinzufügen.
+- Netzwerk-SSH-Suche über einstellbaren 32-IP-Abschnitt.
+- Geräte nur auf ausdrücklichen Wunsch eintragen.
+- Live-Aktualisierung über das HTML-SDK.
+- Alle Aktionen lesend; keine Updates, Neustarts oder SSH-Veränderungen.
 
-## Netzwerk-Suche
+## Sicherheit
+Zugriff auf Instanzkachel nur über geschützte Symcon-Visualisierung. Für Remotezugriff benötigt Symcon einen bereits eingerichteten SSH-Schlüssel. Das Erfassen eines offenen SSH-Ports ersetzt keine Authentifizierung. Keine Kennwörter im Repository. Bitte bei mehreren Visualisierungsnutzern deren Zugriffsrechte prüfen.
 
-Die Suche ist manuell und auf **32 Adressen pro Durchlauf** begrenzt, ausgehend von `ScanStart` im /24 der lokalen Symcon-IP. Sie prüft ausschließlich TCP-Port 22. Zum Durchsuchen weiterer Bereiche `ScanStart` ändern. Gefundene Geräte werden **nicht** automatisch aufgenommen; IP in das Eingabefeld kopieren. Ein offener SSH-Port beweist nicht, dass ein Raspberry Pi vorhanden ist.
-
-## Grenzen und Sicherheit
-
-- Die HTML-Übersicht ist reine Anzeige. Symcon-Statusvariablen sind keine eingebetteten HTML-Buttons. In der Visualisierungsbearbeitung die genannten Bedienvariablen **auf derselben Seite** anordnen.
-- SSH-Verbindung benötigt einen vorher geprüften Host-Schlüssel, gültigen Login und den Pfad zu einem vorhandenen privaten Schlüssel. Keinen Schlüssel in GitHub speichern.
-- Keine Prüfung des echten MQTT-Protokollzustands; nur Dienstüberwachung. APT verwendet bestehende Listen.
-- Keine Verbindung zu privaten Geräten außerhalb des bewusst konfigurierten LAN. Scan nur im festgelegten /24.
-- Nach einem Modulupdate keine zweite Instanz erstellen. Die vorhandene Instanz aktualisieren.
+## Testen
+Update der bestehenden Bibliothek, bestehende Instanz öffnen, Geräte sichtbar? Aktualisieren, Dialog IP hinzufügen und Scan durchführen. PHP-Lint und JSON-Prüfung ersetzen keinen Symcon-Livetest.
