@@ -3,7 +3,7 @@
 declare(strict_types=1);
 
 /**
- * Symcon Raspberry Monitor 0.5 – absichtlich ausschließlich lesend.
+ * Symcon Raspberry Monitor 0.7 – absichtlich ausschließlich lesend.
  * Keine automatischen Netzwerkscans, Updates, Neustarts oder SSH-Schlüsseländerungen.
  */
 class RaspberryMonitor extends IPSModule
@@ -98,6 +98,38 @@ class RaspberryMonitor extends IPSModule
                 $this->pushUI();
                 return;
 
+            case 'UI.Edit':
+                try {
+                    $payload = json_decode((string)$Value, true, 8, JSON_THROW_ON_ERROR);
+                    $this->RenameDevice((string)($payload['ip'] ?? ''), (string)($payload['name'] ?? ''));
+                } catch (Throwable $e) {
+                    $this->SetValue('Feedback', 'Bearbeiten: '.$e->getMessage());
+                }
+                $this->pushUI();
+                return;
+            case 'UI.Remove':
+                try {
+                    $this->RemoveDevice((string)$Value);
+                } catch (Throwable $e) {
+                    $this->SetValue('Feedback', 'Entfernen: '.$e->getMessage());
+                }
+                $this->pushUI();
+                return;
+            case 'UI.Test':
+                try {
+                    $ip = (string)$Value;
+                    $items = json_decode($this->ReadPropertyString('Devices'), true);
+                    if (!is_array($items) || !array_filter($items, static fn($d) => ($d['ip'] ?? '') === $ip)) {
+                        throw new Exception('Gerät nicht registriert');
+                    }
+                    $this->Refresh();
+                    $this->SetValue('Feedback', 'Gerätestatus aktualisiert: '.$ip);
+                } catch (Throwable $e) {
+                    $this->SetValue('Feedback', 'Prüfung: '.$e->getMessage());
+                }
+                $this->pushUI();
+                return;
+
             case 'NewIP':
                 $this->SetValue('NewIP', trim((string)$Value));
                 return;
@@ -158,6 +190,42 @@ class RaspberryMonitor extends IPSModule
         IPS_SetProperty($this->InstanceID, 'Devices', json_encode($devices, JSON_UNESCAPED_UNICODE));
         IPS_ApplyChanges($this->InstanceID);
         $this->SetValue('Feedback', 'Gerät '.$ip.' gespeichert. SSH-Berechtigung in der Instanzkonfiguration prüfen.');
+    }
+
+    /** Ändert nur die Beschriftung, niemals IP, Schlüssel oder Gerät selbst. */
+    public function RenameDevice(string $ip, string $name): void
+    {
+        $name = trim($name);
+        if ($name === '' || mb_strlen($name) > 80) throw new Exception('Name muss 1–80 Zeichen haben');
+        $devices = json_decode($this->ReadPropertyString('Devices'), true);
+        if (!is_array($devices)) throw new Exception('Geräteliste beschädigt');
+        $found = false;
+        foreach ($devices as &$device) {
+            if (($device['ip'] ?? '') === $ip) {
+                $device['name'] = $name;
+                $found = true;
+                break;
+            }
+        }
+        unset($device);
+        if (!$found) throw new Exception('IP nicht gefunden');
+        IPS_SetProperty($this->InstanceID, 'Devices', json_encode($devices, JSON_UNESCAPED_UNICODE));
+        IPS_ApplyChanges($this->InstanceID);
+        $this->SetValue('Feedback', 'Name gespeichert: '.$name);
+        $this->Refresh();
+    }
+
+    /** Entfernt nur die Überwachungskonfiguration, keine Daten auf Geräten. */
+    public function RemoveDevice(string $ip): void
+    {
+        $devices = json_decode($this->ReadPropertyString('Devices'), true);
+        if (!is_array($devices)) throw new Exception('Geräteliste beschädigt');
+        $updated = array_values(array_filter($devices, static fn($d) => ($d['ip'] ?? '') !== $ip));
+        if (count($updated) === count($devices)) throw new Exception('IP nicht gefunden');
+        IPS_SetProperty($this->InstanceID, 'Devices', json_encode($updated, JSON_UNESCAPED_UNICODE));
+        IPS_ApplyChanges($this->InstanceID);
+        $this->SetValue('Feedback', 'Gerät '.$ip.' aus Überwachung entfernt.');
+        $this->Refresh();
     }
 
     private function privateLAN(string $ip): bool
