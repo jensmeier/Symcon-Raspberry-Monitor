@@ -454,6 +454,32 @@ class RaspberryMonitor extends IPSModule
         return $jobs;
     }
 
+    /** MQTT 3.1.1 CONNECT/CONNACK ohne Zugangsdaten; verändert keine Topics. */
+    private function probeMQTTBroker(string $ip, int $port): array
+    {
+        if (!filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) || !$this->privateLAN($ip) || $port < 1 || $port > 65535) {
+            return ['status'=>'unknown', 'label'=>'Ungültiger Broker-Endpunkt'];
+        }
+        $stream = @stream_socket_client('tcp://'.$ip.':'.$port, $errno, $errstr, 2, STREAM_CLIENT_CONNECT);
+        if (!$stream) return ['status'=>'offline', 'label'=>'Broker-Port nicht erreichbar'];
+        stream_set_timeout($stream, 2);
+        $id = 'srm-probe-'.bin2hex(random_bytes(4));
+        $variable = pack('n', strlen($id)).$id;
+        $remaining = 10 + strlen($variable);
+        $packet = chr(0x10).chr($remaining).pack('n', 4).'MQTT'.chr(4).chr(2).pack('n', 5).$variable;
+        $written = @fwrite($stream, $packet);
+        $response = $written === strlen($packet) ? @fread($stream, 4) : false;
+        @fwrite($stream, chr(0xE0).chr(0));
+        fclose($stream);
+        if (!is_string($response) || strlen($response) !== 4 || ord($response[0]) !== 0x20 || ord($response[1]) !== 2) {
+            return ['status'=>'unknown', 'label'=>'Keine gültige MQTT-CONNACK-Antwort'];
+        }
+        $code = ord($response[3]);
+        if ($code === 0) return ['status'=>'ok', 'label'=>'Broker akzeptiert MQTT-CONNECT ohne Anmeldung'];
+        if ($code === 4 || $code === 5) return ['status'=>'auth', 'label'=>'Broker antwortet, Anmeldung erforderlich'];
+        return ['status'=>'error', 'label'=>'MQTT-CONNACK Fehlercode '.$code];
+    }
+
     public function Refresh(): void
     {
         $items = json_decode($this->ReadPropertyString('Devices'), true);
@@ -500,6 +526,7 @@ class RaspberryMonitor extends IPSModule
             }
         }
         unset($state);
+        $brokerCheck = $this->probeMQTTBroker('192.168.178.41', 1029);
         // Begrenzte, interne Messhistorie: keine zusätzlichen Symcon-Variablen.
         $history = json_decode($this->GetBuffer('MetricsHistory'), true);
         if (!is_array($history)) $history = [];
@@ -520,7 +547,7 @@ class RaspberryMonitor extends IPSModule
         $configured = array_column($states, 'ip');
         $history = array_intersect_key($history, array_flip($configured));
         $this->SetBuffer('MetricsHistory', json_encode($history, JSON_UNESCAPED_UNICODE));
-        $this->SetValue('StatusJSON', json_encode(['at' => date(DATE_ATOM), 'devices' => $states, 'history' => $history, 'restartJobs' => $restartJobs, 'restartEnabled' => $this->ReadPropertyBoolean('AllowRestart'), 'serviceRestartEnabled' => $this->ReadPropertyBoolean('AllowServiceRestart')], JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT));
+        $this->SetValue('StatusJSON', json_encode(['at' => date(DATE_ATOM), 'devices' => $states, 'history' => $history, 'restartJobs' => $restartJobs, 'brokerMQTT' => $brokerCheck, 'restartEnabled' => $this->ReadPropertyBoolean('AllowRestart'), 'serviceRestartEnabled' => $this->ReadPropertyBoolean('AllowServiceRestart')], JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT));
         $lines = ['Raspberry Monitor 1.2 – '.date('d.m.Y H:i:s')];
         foreach ($states as $s) {
             $lines[] = sprintf('%s (%s): %s | OS: %s | Kernel: %s | CPU: %s | RAM: %s | HDD: %s | Updates: %s | Dienst: %s',
