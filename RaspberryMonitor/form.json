@@ -2,7 +2,7 @@
   "elements": [
     {
       "type": "Label",
-      "caption": "Raspberry Monitor 1.6 – bestehende Geräte bleiben erhalten"
+      "caption": "Raspberry Monitor 1.7 – MQTT-Broker-Protokolltest, nur lesend"
     },
     {
       "type": "List",
@@ -113,6 +113,18 @@
       "caption": "Maximales Alter einer Bridge-Statusaktualisierung (Minuten)",
       "minimum": 1,
       "maximum": 1440
+    },
+    {
+      "type": "ValidationTextBox",
+      "name": "MQTTBrokerIP",
+      "caption": "MQTT-Broker-IP (LAN)"
+    },
+    {
+      "type": "NumberSpinner",
+      "name": "MQTTBrokerPort",
+      "caption": "MQTT-Broker-Port",
+      "minimum": 1,
+      "maximum": 65535
     }
   ],
   "actions": [
