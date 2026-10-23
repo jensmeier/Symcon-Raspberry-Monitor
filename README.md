@@ -1,4 +1,4 @@
-# Symcon Raspberry Monitor 1.4 (Entwicklungsstand)
+# Symcon Raspberry Monitor 1.5 (Entwicklungsstand)
 
 IP-Symcon 9.0: responsive, helle HTML-SDK-Oberfläche zur Überwachung von Linux-/Raspberry-Pi-Systemen.
 
@@ -23,6 +23,14 @@ IP-Symcon 9.0: responsive, helle HTML-SDK-Oberfläche zur Überwachung von Linux
 - Schaltfläche **Updates prüfen** öffnet eine eigene übersichtliche Liste mit Paketnamen, installierter und angebotener Version, soweit APT diese Informationen liefert.
 - APT-Upgrade wird ausschließlich **simuliert**; Paketlisten werden dabei nicht aktualisiert und Pakete nicht installiert.
 - Ausgabe im HTML-SDK-Dialog; keine zusätzlichen Symcon-Variablen.
+
+## Neu in 1.5
+- Neustart-Erfolgskontrolle ohne pauschale Erfolgsmeldung: Systemneustart gilt nur mit neuer `/proc/sys/kernel/random/boot_id` und aktivem relevanten Dienst als bestätigt.
+- Dienstneustart gilt erst mit veränderter `systemctl show ... ActiveEnterTimestampMonotonic` und aktivem Dienst als bestätigt.
+- Nach sechs Minuten ohne Bestätigung erscheint **nicht bestätigt**, nicht fälschlich erfolgreich.
+- Status je Gerät in der vorhandenen HTML-SDK-Kachel; keine neuen Variablen.
+- Die Nachprüfung erfolgt mit den normalen Modul-Aktualisierungen (standardmäßig alle fünf Minuten). Für schnellere Rückmeldung muss das Überwachungsintervall reduziert werden.
+- Die bisherigen Neustart-Freigaben bleiben standardmäßig ausgeschaltet. Kein automatischer Neustart oder Update wird ausgelöst.
 
 ## Funktionen
 - Systemkarten mit CPU-Temperatur, RAM, Festplatte, Debian, Kernel und APT-Paketupdateanzahl.
