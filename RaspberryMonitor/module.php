@@ -74,6 +74,7 @@ class RaspberryMonitor extends IPSModule
         $data["found"] = $this->GetValue("Found");
         $data['restartEnabled'] = $this->ReadPropertyBoolean('AllowRestart');
         $data['serviceRestartEnabled'] = $this->ReadPropertyBoolean('AllowServiceRestart');
+        $data['restartJobs'] = json_decode($this->GetBuffer('RestartJobs'), true) ?: [];
         $this->UpdateVisualizationValue(json_encode($data, JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE));
     }
 
@@ -180,10 +181,16 @@ class RaspberryMonitor extends IPSModule
                     $ip = (string)$ticket['ip'];
                     $item = $this->deviceByIP($ip);
                     $remote = ($item['mode'] ?? 'ssh') !== 'local';
+                    $baseline = $this->restartEvidence($item, true);
                     $cmd = $remote
                         ? 'sudo -n /usr/bin/systemctl restart zigbee2mqtt'
                         : '/usr/bin/systemd-run --on-active=3s --unit=srm-symcon-'.time().' /usr/bin/systemctl restart symcon';
                     [$ok, $out] = $this->run($cmd, $remote, $ip, (string)($item['user'] ?? 'pi'), (string)($item['key'] ?? ''));
+                    if ($ok && $baseline !== '') {
+                        $jobs = json_decode($this->GetBuffer('RestartJobs'), true) ?: [];
+                        $jobs[$ip] = ['kind'=>'service','baseline'=>$baseline,'started'=>time(),'status'=>'pending','message'=>'Neustart ausgelöst, Bestätigung ausstehend.'];
+                        $this->SetBuffer('RestartJobs', json_encode($jobs));
+                    }
                     $this->SetValue('Feedback', $ok ? 'Dienstneustartkommando übergeben: '.$ticket['service'].'. Erfolg nach Wiederverbindung noch prüfen.' : 'Dienstneustart fehlgeschlagen: '.substr($out,0,180));
                 } catch (Throwable $e) {
                     $this->SetValue('Feedback', 'Dienstneustart: '.$e->getMessage());
@@ -216,8 +223,14 @@ class RaspberryMonitor extends IPSModule
                     $item = $this->deviceByIP($ip);
                     $remote = ($item['mode'] ?? 'ssh') !== 'local';
                     // Lokale Neustarts über separate systemd-Unit anstoßen: PHP wird dabei beendet.
+                    $baseline = $this->restartEvidence($item, false);
                     $cmd = $remote ? 'sudo -n /usr/bin/systemctl reboot' : '/usr/bin/systemd-run --on-active=5s --unit=srm-reboot-'.time().' /usr/bin/systemctl reboot';
                     [$ok,$out] = $this->run($cmd, $remote, $ip, (string)($item['user'] ?? 'pi'), (string)($item['key'] ?? ''));
+                    if ($ok && $baseline !== '') {
+                        $jobs = json_decode($this->GetBuffer('RestartJobs'), true) ?: [];
+                        $jobs[$ip] = ['kind'=>'system','baseline'=>$baseline,'started'=>time(),'status'=>'pending','message'=>'Neustart ausgelöst, Bestätigung ausstehend.'];
+                        $this->SetBuffer('RestartJobs', json_encode($jobs));
+                    }
                     $this->SetValue('Feedback', $ok ? 'Neustartkommando für '.$ip.' übergeben; Rückkehr zur Erreichbarkeit noch nicht bestätigt.' : 'Neustart fehlgeschlagen: '.substr($out,0,180));
                 } catch (Throwable $e) {
                     $this->SetValue('Feedback', 'Neustart: '.$e->getMessage());
@@ -386,6 +399,59 @@ class RaspberryMonitor extends IPSModule
         $this->pushUI();
     }
 
+    // Erfolg nur bei nachweislich geänderter Boot-ID bzw. Dienst-Aktivierungszeit.
+    private function restartEvidence(array $item, bool $service): string
+    {
+        $ip = (string)$item['ip'];
+        $remote = ($item['mode'] ?? 'ssh') !== 'local';
+        $cmd = $service
+            ? 'systemctl show '.($remote ? 'zigbee2mqtt' : 'symcon').' -p ActiveEnterTimestampMonotonic --value'
+            : 'cat /proc/sys/kernel/random/boot_id';
+        [$ok, $output] = $this->run($cmd, $remote, $ip, (string)($item['user'] ?? 'pi'), (string)($item['key'] ?? ''));
+        return $ok ? trim($output) : '';
+    }
+
+    private function monitorRestarts(array &$states): array
+    {
+        $jobs = json_decode($this->GetBuffer('RestartJobs'), true);
+        if (!is_array($jobs)) $jobs = [];
+        $now = time();
+        foreach ($jobs as $ip => &$job) {
+            if (!in_array(($job['status'] ?? ''), ['pending','checking'], true)) continue;
+            $item = null;
+            foreach ($states as $s) if (($s['ip'] ?? '') === $ip) { $item = $s; break; }
+            if ($item === null) continue;
+            if (($item['online'] ?? false) && ($now - (int)$job['started']) >= 5) {
+                try {
+                    $device = $this->deviceByIP($ip);
+                    $evidence = $this->restartEvidence($device, $job['kind'] === 'service');
+                    $expectedService = ($device['mode'] ?? 'ssh') === 'local' ? ($item['symconService'] ?? '') : ($item['service'] ?? '');
+                    if ($evidence !== '' && ($job['baseline'] ?? '') !== '' && $evidence !== $job['baseline'] && $expectedService === 'active') {
+                        $job['status'] = 'confirmed';
+                        $job['message'] = 'Neustart nachgewiesen, Dienst aktiv.';
+                        $job['ended'] = $now;
+                        continue;
+                    }
+                } catch (Throwable $e) {
+                    $job['message'] = 'Nachprüfung derzeit nicht möglich.';
+                }
+            }
+            if ($now > (int)$job['started'] + 360) {
+                $job['status'] = 'unverified';
+                $job['message'] = 'Nach sechs Minuten nicht bestätigt. Bitte System direkt prüfen.';
+                $job['ended'] = $now;
+            } else {
+                $job['status'] = 'checking';
+                $job['message'] = 'Warte auf nachweisbaren Neustart und aktiven Dienst.';
+            }
+        }
+        unset($job);
+        // Höchstens 25 Vorgänge speichern.
+        if (count($jobs)>25) $jobs = array_slice($jobs, -25, null, true);
+        $this->SetBuffer('RestartJobs', json_encode($jobs));
+        return $jobs;
+    }
+
     public function Refresh(): void
     {
         $items = json_decode($this->ReadPropertyString('Devices'), true);
@@ -396,6 +462,7 @@ class RaspberryMonitor extends IPSModule
         foreach ($items as $item) {
             $states[] = $this->readDevice(is_array($item) ? $item : []);
         }
+        $restartJobs = $this->monitorRestarts($states);
         // Begrenzte, interne Messhistorie: keine zusätzlichen Symcon-Variablen.
         $history = json_decode($this->GetBuffer('MetricsHistory'), true);
         if (!is_array($history)) $history = [];
@@ -416,7 +483,7 @@ class RaspberryMonitor extends IPSModule
         $configured = array_column($states, 'ip');
         $history = array_intersect_key($history, array_flip($configured));
         $this->SetBuffer('MetricsHistory', json_encode($history, JSON_UNESCAPED_UNICODE));
-        $this->SetValue('StatusJSON', json_encode(['at' => date(DATE_ATOM), 'devices' => $states, 'history' => $history, 'restartEnabled' => $this->ReadPropertyBoolean('AllowRestart'), 'serviceRestartEnabled' => $this->ReadPropertyBoolean('AllowServiceRestart')], JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT));
+        $this->SetValue('StatusJSON', json_encode(['at' => date(DATE_ATOM), 'devices' => $states, 'history' => $history, 'restartJobs' => $restartJobs, 'restartEnabled' => $this->ReadPropertyBoolean('AllowRestart'), 'serviceRestartEnabled' => $this->ReadPropertyBoolean('AllowServiceRestart')], JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT));
         $lines = ['Raspberry Monitor 1.2 – '.date('d.m.Y H:i:s')];
         foreach ($states as $s) {
             $lines[] = sprintf('%s (%s): %s | OS: %s | Kernel: %s | CPU: %s | RAM: %s | HDD: %s | Updates: %s | Dienst: %s',
