@@ -1,11 +1,17 @@
-# Symcon Raspberry Monitor 1.1 (Entwicklungsstand)
+# Symcon Raspberry Monitor 1.2 (Entwicklungsstand)
 
 IP-Symcon 9.0: responsive, helle HTML-SDK-Oberfläche zur Überwachung von Linux-/Raspberry-Pi-Systemen.
 
-## Neu in 1.1
+## Neu in 1.2
 - Bei aktivem Zigbee2MQTT-Dienst werden die letzten fünf Minuten aus `journalctl` auf typische MQTT-Verbindungsfehler geprüft.
 - Keine Fehlerinträge bedeutet **nicht**, dass die MQTT-Sitzung bestätigt ist. Die tatsächliche MQTT-Protokollprüfung per `zigbee2mqtt/bridge/health` steht noch aus.
 - Keine Konfigurationsänderungen, Neustarts oder Updates durch diese Diagnose.
+
+## Ergänzungen in 1.2
+- Pro Gerät Systemlaufzeit und tatsächlich freien Speicher anzeigen.
+- Sichtbare Warnungen bei Datenträgerbelegung ab 85 % / 90 % und CPU-Temperatur ab 70 °C / 80 °C.
+- Warnung bei im Journal gefundenen MQTT-Fehlermeldungen.
+- Es erfolgen weiterhin keine automatischen Updates und keine automatischen Neustarts.
 
 ## Funktionen
 - Systemkarten mit CPU-Temperatur, RAM, Festplatte, Debian, Kernel und APT-Paketupdateanzahl.
