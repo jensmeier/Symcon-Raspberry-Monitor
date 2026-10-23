@@ -17,6 +17,7 @@ class RaspberryMonitor extends IPSModule
             ['name' => 'Zigbee-Raspberry', 'ip' => '192.168.178.90', 'mode' => 'ssh', 'user' => 'pi', 'key' => '/root/.ssh/symcon_zigbee']
         ]));
         $this->RegisterPropertyInteger('Interval', 5);
+        $this->RegisterPropertyBoolean('AllowRestart', false);
         $this->RegisterPropertyInteger('ScanStart', 1);
         $this->RegisterTimer('RefreshTimer', 0, 'SRM_Refresh($_IPS[\'TARGET\']);');
         $this->RegisterVariableString('Overview', 'Raspberry Übersicht', '~HTMLBox');
@@ -70,6 +71,7 @@ class RaspberryMonitor extends IPSModule
         $data = json_decode($this->GetValue("StatusJSON"), true);
         $data["feedback"] = $this->GetValue("Feedback");
         $data["found"] = $this->GetValue("Found");
+        $data['restartEnabled'] = $this->ReadPropertyBoolean('AllowRestart');
         $this->UpdateVisualizationValue(json_encode($data, JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE));
     }
 
@@ -112,6 +114,56 @@ class RaspberryMonitor extends IPSModule
                     $this->RemoveDevice((string)$Value);
                 } catch (Throwable $e) {
                     $this->SetValue('Feedback', 'Entfernen: '.$e->getMessage());
+                }
+                $this->pushUI();
+                return;
+            case 'UI.UpdateCheck':
+                try {
+                    $ip = (string)$Value;
+                    $item = $this->deviceByIP($ip);
+                    $remote = ($item['mode'] ?? 'ssh') !== 'local';
+                    $command = 'LC_ALL=C apt-get -s upgrade';
+                    [$ok, $out] = $this->run($command, $remote, $ip, (string)($item['user'] ?? 'pi'), (string)($item['key'] ?? ''));
+                    if (!$ok) throw new Exception(substr($out, 0, 180));
+                    preg_match_all('/^Inst\s+([^\s]+)/m', $out, $match);
+                    $names = array_values(array_unique($match[1]));
+                    $this->SetValue('Feedback', $ip.': '.count($names).' mögliche Paketupdates (APT-Listen): '.($names ? implode(', ', array_slice($names, 0, 15)) : 'keine').'. Es wurde nichts installiert.');
+                } catch (Throwable $e) {
+                    $this->SetValue('Feedback', 'Updateprüfung: '.$e->getMessage());
+                }
+                $this->pushUI();
+                return;
+            case 'UI.RestartPrepare':
+                try {
+                    if (!$this->ReadPropertyBoolean('AllowRestart')) throw new Exception('Neustarts sind in der Instanzkonfiguration gesperrt.');
+                    $ip = (string)$Value;
+                    $item = $this->deviceByIP($ip);
+                    $ticket = bin2hex(random_bytes(16));
+                    $this->SetBuffer('RestartTicket', json_encode(['ip'=>$ip,'token'=>$ticket,'expires'=>time()+60]));
+                    $this->SetValue('Feedback', 'Neustart für '.$ip.' vorbereitet. Bitte im Dialog binnen 60 Sekunden bestätigen.');
+                    $this->pushUI();
+                    $this->UpdateVisualizationValue(json_encode(['restartTicket'=>$ticket,'restartIP'=>$ip], JSON_UNESCAPED_UNICODE));
+                } catch (Throwable $e) {
+                    $this->SetValue('Feedback', 'Neustart: '.$e->getMessage());
+                    $this->pushUI();
+                }
+                return;
+            case 'UI.RestartConfirm':
+                try {
+                    if (!$this->ReadPropertyBoolean('AllowRestart')) throw new Exception('Neustarts sind gesperrt.');
+                    $payload = json_decode((string)$Value, true, 8, JSON_THROW_ON_ERROR);
+                    $ticket = json_decode($this->GetBuffer('RestartTicket'), true);
+                    $this->SetBuffer('RestartTicket', '');
+                    if (!is_array($ticket) || !hash_equals((string)$ticket['token'], (string)($payload['token'] ?? '')) || $ticket['ip'] !== ($payload['ip'] ?? '') || time() > (int)$ticket['expires']) throw new Exception('Bestätigung ungültig oder abgelaufen.');
+                    $ip = (string)$ticket['ip'];
+                    $item = $this->deviceByIP($ip);
+                    $remote = ($item['mode'] ?? 'ssh') !== 'local';
+                    // Lokale Neustarts über separate systemd-Unit anstoßen: PHP wird dabei beendet.
+                    $cmd = $remote ? 'sudo -n /usr/bin/systemctl reboot' : '/usr/bin/systemd-run --on-active=5s --unit=srm-reboot-'.time().' /usr/bin/systemctl reboot';
+                    [$ok,$out] = $this->run($cmd, $remote, $ip, (string)($item['user'] ?? 'pi'), (string)($item['key'] ?? ''));
+                    $this->SetValue('Feedback', $ok ? 'Neustartkommando für '.$ip.' übergeben; Rückkehr zur Erreichbarkeit noch nicht bestätigt.' : 'Neustart fehlgeschlagen: '.substr($out,0,180));
+                } catch (Throwable $e) {
+                    $this->SetValue('Feedback', 'Neustart: '.$e->getMessage());
                 }
                 $this->pushUI();
                 return;
@@ -190,6 +242,16 @@ class RaspberryMonitor extends IPSModule
         IPS_SetProperty($this->InstanceID, 'Devices', json_encode($devices, JSON_UNESCAPED_UNICODE));
         IPS_ApplyChanges($this->InstanceID);
         $this->SetValue('Feedback', 'Gerät '.$ip.' gespeichert. SSH-Berechtigung in der Instanzkonfiguration prüfen.');
+    }
+
+    private function deviceByIP(string $ip): array
+    {
+        $items = json_decode($this->ReadPropertyString('Devices'), true);
+        if (!is_array($items)) throw new Exception('Geräteliste ungültig');
+        foreach ($items as $item) {
+            if (($item['ip'] ?? '') === $ip && filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) && $this->privateLAN($ip)) return $item;
+        }
+        throw new Exception('Gerät nicht registriert');
     }
 
     /** Ändert nur die Beschriftung, niemals IP, Schlüssel oder Gerät selbst. */
@@ -277,7 +339,7 @@ class RaspberryMonitor extends IPSModule
         foreach ($items as $item) {
             $states[] = $this->readDevice(is_array($item) ? $item : []);
         }
-        $this->SetValue('StatusJSON', json_encode(['at' => date(DATE_ATOM), 'devices' => $states], JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT));
+        $this->SetValue('StatusJSON', json_encode(['at' => date(DATE_ATOM), 'devices' => $states, 'restartEnabled' => $this->ReadPropertyBoolean('AllowRestart')], JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT));
         $lines = ['Raspberry Monitor 0.5 – '.date('d.m.Y H:i:s')];
         foreach ($states as $s) {
             $lines[] = sprintf('%s (%s): %s | OS: %s | Kernel: %s | CPU: %s | RAM: %s | HDD: %s | Updates: %s | Dienst: %s',
