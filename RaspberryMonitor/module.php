@@ -376,7 +376,7 @@ class RaspberryMonitor extends IPSModule
             $states[] = $this->readDevice(is_array($item) ? $item : []);
         }
         $this->SetValue('StatusJSON', json_encode(['at' => date(DATE_ATOM), 'devices' => $states, 'restartEnabled' => $this->ReadPropertyBoolean('AllowRestart'), 'serviceRestartEnabled' => $this->ReadPropertyBoolean('AllowServiceRestart')], JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT));
-        $lines = ['Raspberry Monitor 0.5 – '.date('d.m.Y H:i:s')];
+        $lines = ['Raspberry Monitor 1.2 – '.date('d.m.Y H:i:s')];
         foreach ($states as $s) {
             $lines[] = sprintf('%s (%s): %s | OS: %s | Kernel: %s | CPU: %s | RAM: %s | HDD: %s | Updates: %s | Dienst: %s',
                 $s['name'], $s['ip'], $s['online'] ? 'ONLINE' : 'OFFLINE', $s['os'], $s['kernel'], $s['temp'], $s['ram'], $s['disk'], $s['updates'], $s['service']);
@@ -417,14 +417,14 @@ class RaspberryMonitor extends IPSModule
         $remote = ($device['mode'] ?? 'ssh') !== 'local';
         $user = (string)($device['user'] ?? 'pi');
         $key = (string)($device['key'] ?? '');
-        $state = ['name' => $name, 'ip' => $ip, 'online' => false, 'os' => '–', 'kernel' => '–', 'temp' => '–', 'ram' => '–', 'disk' => '–', 'updates' => '–', 'service' => '–', 'node' => '–', 'zigbeeVersion' => '–', 'symconService' => '–', 'mqttDiagnosis' => 'Nicht geprüft', 'error' => ''];
+        $state = ['name' => $name, 'ip' => $ip, 'online' => false, 'os' => '–', 'kernel' => '–', 'temp' => '–', 'ram' => '–', 'disk' => '–', 'updates' => '–', 'service' => '–', 'node' => '–', 'zigbeeVersion' => '–', 'symconService' => '–', 'mqttDiagnosis' => 'Nicht geprüft', 'uptime' => '–', 'diskFree' => '–', 'warnings' => [], 'error' => ''];
         if (!filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) { $state['error'] = 'Ungültige IPv4-Adresse'; return $state; }
         if ($remote && (!preg_match('/^[a-z_][a-z0-9_-]{0,31}$/', $user) || !preg_match('#^/[a-zA-Z0-9/_\.\-]+$#', $key))) {
             $state['error'] = 'SSH-Nutzer oder Schlüsselpfad ungültig'; return $state;
         }
         // Genau ein kurzer SSH-Aufruf pro Raspberry; Ausgabe auf feste Zeilenzahl beschränkt.
         $read = <<<'SH'
-LC_ALL=C; echo "OS=$(sed -n 's/^PRETTY_NAME=//p' /etc/os-release | head -n1 | tr -d '"')"; echo "KERNEL=$(uname -r)"; echo "TEMP=$(cat /sys/class/thermal/thermal_zone0/temp 2>/dev/null || echo NA)"; echo "RAM=$(awk '/MemTotal:/ {t=$2} /MemAvailable:/ {a=$2} END {if(t>0) printf "%.0f%%",(t-a)*100/t; else print "NA"}' /proc/meminfo)"; echo "DISK=$(df -P / | awk 'NR==2 {print $5}')"; echo "UPDATES=$(LC_ALL=C apt-get -s upgrade 2>/dev/null | awk '/^Inst / {n++} END {print n+0}')"; echo "SERVICE=$(systemctl is-active zigbee2mqtt 2>/dev/null || true)"; echo "SYMD=$(systemctl is-active symcon 2>/dev/null || true)"; echo "NODE=$(node -v 2>/dev/null || true)"; echo "Z2MV=$(grep -m1 version /opt/zigbee2mqtt/package.json 2>/dev/null | tr -cd 0-9.)"
+LC_ALL=C; echo "OS=$(sed -n 's/^PRETTY_NAME=//p' /etc/os-release | head -n1 | tr -d '"')"; echo "KERNEL=$(uname -r)"; echo "TEMP=$(cat /sys/class/thermal/thermal_zone0/temp 2>/dev/null || echo NA)"; echo "RAM=$(awk '/MemTotal:/ {t=$2} /MemAvailable:/ {a=$2} END {if(t>0) printf "%.0f%%",(t-a)*100/t; else print "NA"}' /proc/meminfo)"; echo "DISK=$(df -P / | awk 'NR==2 {print $5}')"; echo "DISKFREE=$(df -Pk / | awk 'NR==2 {printf \"%.1f GB\", $4/1048576}')"; echo "UPTIME=$(uptime -p)"; echo "UPDATES=$(LC_ALL=C apt-get -s upgrade 2>/dev/null | awk '/^Inst / {n++} END {print n+0}')"; echo "SERVICE=$(systemctl is-active zigbee2mqtt 2>/dev/null || true)"; echo "SYMD=$(systemctl is-active symcon 2>/dev/null || true)"; echo "NODE=$(node -v 2>/dev/null || true)"; echo "Z2MV=$(grep -m1 version /opt/zigbee2mqtt/package.json 2>/dev/null | tr -cd 0-9.)"
 SH;
         [$ok, $output] = $this->run($read, $remote, $ip, $user, $key);
         if (!$ok) { $state['error'] = substr($output, 0, 220); return $state; }
@@ -437,6 +437,8 @@ SH;
             if ($k === 'KERNEL') $state['kernel'] = $v;
             if ($k === 'RAM') $state['ram'] = $v;
             if ($k === 'DISK') $state['disk'] = $v;
+            if ($k === 'DISKFREE') $state['diskFree'] = $v;
+            if ($k === 'UPTIME') $state['uptime'] = $v;
             if ($k === 'UPDATES') $state['updates'] = $v.' (APT-Listen)';
             if ($k === 'SERVICE') $state['service'] = $v;
             if ($k === 'SYMD') $state['symconService'] = $v;
@@ -463,6 +465,13 @@ SH;
         } else {
             $state['mqttDiagnosis'] = 'Nicht anwendbar';
         }
+        $diskPercent = (int) $state['disk'];
+        $temp = (float) str_replace(',', '.', $state['temp']);
+        if ($diskPercent >= 90) $state['warnings'][] = 'Festplatte kritisch: '.$state['disk'];
+        elseif ($diskPercent >= 85) $state['warnings'][] = 'Festplatte fast voll: '.$state['disk'];
+        if ($temp >= 80) $state['warnings'][] = 'CPU-Temperatur kritisch: '.$state['temp'];
+        elseif ($temp >= 70) $state['warnings'][] = 'CPU-Temperatur erhöht: '.$state['temp'];
+        if (str_contains($state['mqttDiagnosis'], 'Warnung:')) $state['warnings'][] = 'MQTT-Fehlermeldung im Dienstprotokoll';
         return $state;
     }
 
