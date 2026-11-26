@@ -636,7 +636,7 @@ class RaspberryMonitor extends IPSModule
                 $bridge['ageSeconds'] = $age;
                 if ($age === null || $age > $maxAge) {
                     $bridge['status'] = 'stale';
-                    $bridge['label'] = 'Bridge-Status nicht frisch – MQTT nicht bestätigt';
+                    $bridge['label'] = 'Zuletzt gemeldet: '.(GetValueBoolean($bridgeID)?'Online':'Offline').' · keine frische Bestätigung';
                 } elseif (GetValueBoolean($bridgeID)) {
                     $bridge['status'] = 'ok';
                     $bridge['label'] = 'Bridge meldet OK (frischer Status)';
@@ -708,7 +708,7 @@ class RaspberryMonitor extends IPSModule
             $ip = (string)($deviceState['ip'] ?? '');
             if ($ip === '' || !($deviceState['online'] ?? false)) continue;
             $tempRaw = str_replace(',', '.', (string)($deviceState['temp'] ?? ''));
-            $entry = ['t' => $now, 'cpu' => $deviceState['cpuPercent'] ?? null, 'temp' => is_numeric(preg_replace('/[^0-9.]/', '', $tempRaw)) ? (float)preg_replace('/[^0-9.]/', '', $tempRaw) : null,
+            $entry = ['t' => $now, 'ssd' => $deviceState['smart']['temperature'] ?? null, 'cpu' => $deviceState['cpuPercent'] ?? null, 'temp' => is_numeric(preg_replace('/[^0-9.]/', '', $tempRaw)) ? (float)preg_replace('/[^0-9.]/', '', $tempRaw) : null,
                 'disk' => is_numeric(rtrim((string)($deviceState['disk'] ?? ''), '%')) ? (int)rtrim((string)$deviceState['disk'], '%') : null,
                 'ram' => is_numeric(rtrim((string)($deviceState['ram'] ?? ''), '%')) ? (int)rtrim((string)$deviceState['ram'], '%') : null];
             $samples = $history[$ip] ?? [];
@@ -845,6 +845,52 @@ class RaspberryMonitor extends IPSModule
         $this->WriteAttributeString('RecoveryState',json_encode($record));
     }
 
+    private function readStorage(array $state, bool $remote, string $ip, string $user, string $key): array
+    {
+        $path = $state['physicalDisk'] ?? '';
+        if (!preg_match('#^/dev/(?:sd[a-z]+|nvme[0-9]+n[0-9]+|mmcblk[0-9]+|vd[a-z]+)$#D',$path)) return ['status'=>'Datenträger nicht eindeutig erkannt'];
+        if (str_starts_with($path,'/dev/mmcblk')) return ['status'=>'SD/eMMC: SMART nicht unterstützt'];
+        $cache = json_decode($this->GetBuffer('SmartCache'),true) ?: [];
+        $entry = $cache[$ip] ?? [];
+        if (($entry['path'] ?? '') === $path && time()-(int)($entry['at'] ?? 0)<300) return $entry['data'];
+        $device = escapeshellarg($path);
+        $cmd = 'if ! command -v smartctl >/dev/null 2>&1; then echo SMART_MISSING; else smartctl -a -j '.$device.' 2>/dev/null; fi';
+        [$ok,$out] = $this->run($cmd,$remote,$ip,$user,$key);
+        $j = json_decode($out,true);
+        if ($out === 'SMART_MISSING') $data = ['status'=>'smartmontools fehlt'];
+        else {
+            // SMART exit status is a bitmask, not a simple success flag.
+            if (!is_array($j) || !isset($j['smart_status']) && !isset($j['temperature']) && !isset($j['power_on_time'])) {
+                [$ok,$out] = $this->run('smartctl -a -j -d sat '.$device.' 2>/dev/null',$remote,$ip,$user,$key);
+                $j = json_decode($out,true);
+            }
+            $data = ['status'=>'SMART nicht lesbar (Adapter oder Berechtigung prüfen)'];
+            if (is_array($j)) {
+                $nv = $j['nvme_smart_health_information_log'] ?? [];
+                $data = ['status'=>isset($j['smart_status']['passed'])?($j['smart_status']['passed']?'Bestanden':'Fehler gemeldet'):'Gesundheit unbekannt',
+                    'model'=>$j['model_name'] ?? null,'serial'=>$j['serial_number'] ?? null,'firmware'=>$j['firmware_version'] ?? null,
+                    'temperature'=>$j['temperature']['current'] ?? $nv['temperature'] ?? null,
+                    'hours'=>$j['power_on_time']['hours'] ?? $nv['power_on_hours'] ?? null,
+                    'cycles'=>$j['power_cycle_count'] ?? $nv['power_cycles'] ?? null,
+                    'lifeRemaining'=>isset($nv['percentage_used'])?max(0,100-(int)$nv['percentage_used']):null,
+                    'writtenTB'=>isset($nv['data_units_written'])?round((float)$nv['data_units_written']*512000/1e12,2):null,
+                    'readTB'=>isset($nv['data_units_read'])?round((float)$nv['data_units_read']*512000/1e12,2):null,
+                    'mediaErrors'=>$nv['media_errors'] ?? null,'unsafeShutdowns'=>$nv['unsafe_shutdowns'] ?? null];
+                foreach (($j['ata_smart_attributes']['table'] ?? []) as $a) {
+                    $id=(int)($a['id'] ?? 0);$raw=$a['raw']['value'] ?? null;
+                    if ($id===5) $data['reallocated']=$raw;
+                    if ($id===197) $data['pending']=$raw;
+                    if ($id===198) $data['uncorrectable']=$raw;
+                }
+                if (!isset($j['smart_status']) && $data['temperature']===null && $data['hours']===null) $data['status']='SMART nicht lesbar (Adapter oder Berechtigung prüfen)';
+            }
+        }
+        $data['at']=time();
+        $cache[$ip]=['path'=>$path,'at'=>time(),'data'=>$data];
+        $this->SetBuffer('SmartCache',json_encode($cache,JSON_INVALID_UTF8_SUBSTITUTE));
+        return $data;
+    }
+
     private function readDevice(array $device): array
     {
         $name = substr((string)($device['name'] ?? 'Unbenannt'), 0, 100);
@@ -866,6 +912,9 @@ echo "FAN=$(for f in /sys/class/hwmon/hwmon*/fan1_input; do if [ -r "$f" ]; then
 echo "CPU=$(awk '/^cpu / {print $2,$3,$4,$5,$6,$7,$8,$9; exit}' /proc/stat)"
 echo "SWAP=$(awk '/SwapTotal:/ {t=$2} /SwapFree:/ {f=$2} END {if(t>0) printf "%.0f%%",(t-f)*100/t; else print "0%%"}' /proc/meminfo)"
 echo "SERIAL=$(if [ -d /dev/serial/by-id ]; then find /dev/serial/by-id -maxdepth 1 -type l -exec test -e {} \; -print | wc -l; else echo 0; fi)"
+root=$(findmnt -n -o SOURCE /); root=$(readlink -f "$root"); parent=$(lsblk -ndo PKNAME "$root" 2>/dev/null | head -n1); if [ -n "$parent" ]; then root="/dev/$parent"; fi
+if [ -b "$root" ]; then echo "PHYSICAL=$root"; echo "MODEL=$(lsblk -ndo MODEL "$root" 2>/dev/null)"; echo "ROTA=$(lsblk -ndo ROTA "$root" 2>/dev/null)"; echo "TRAN=$(lsblk -ndo TRAN "$root" 2>/dev/null)"; fi
+for p in /dev/serial/by-id/*; do if [ -c "$p" ]; then printf 'SERIALPATH=%s\n' "$p"; fi; done
 echo "REBOOT=$(if [ -f /run/reboot-required ]; then echo yes; else echo no; fi)"
 SH;
         $isZigbee = $remote && $ip === $this->ReadPropertyString('ZigbeeServerIP');
@@ -912,6 +961,11 @@ SH;
                 $all[$ip] = [$total,$idle];
                 $this->SetBuffer('CpuTicks', json_encode($all));
             }
+            if ($k === 'PHYSICAL') $state['physicalDisk']=$v;
+            if ($k === 'MODEL') $state['diskModel']=$v;
+            if ($k === 'ROTA') $state['rotational']=$v;
+            if ($k === 'TRAN') $state['diskTransport']=$v;
+            if ($k === 'SERIALPATH' && preg_match('#^/dev/serial/by-id/[A-Za-z0-9_.:+-]+$#D',$v)) $state['serialPaths'][]=$v;
             if ($k === 'SWAP') $state['swap'] = $v;
             if ($k === 'COORD') $state['coordinator'] = $v;
             if ($k === 'LOAD') $state['load'] = $v;
@@ -934,6 +988,9 @@ SH;
             if ($k === 'Z2MV') $state['zigbeeVersion'] = $v;
             if ($k === 'TEMP' && is_numeric($v)) $state['temp'] = number_format(((float)$v) / 1000, 1, ',', '.').' °C';
         }
+        $state['smart']=$this->readStorage($state,$remote,$ip,$user,$key);
+        if (($state['smart']['status'] ?? '')==='Fehler gemeldet') $state['warnings'][]='SMART meldet Datenträgerfehler';
+        if (is_numeric($state['smart']['temperature'] ?? null) && $state['smart']['temperature']>=65) $state['warnings'][]='Datenträgertemperatur erhöht';
         if ($state['service'] === 'active') {
             // Protokollbasierte Zusatzdiagnose: kein Beweis für eine bestehende MQTT-Sitzung.
             // '-q' unterdrückt Journal-Metadaten, '-n' begrenzt den Datenumfang.
