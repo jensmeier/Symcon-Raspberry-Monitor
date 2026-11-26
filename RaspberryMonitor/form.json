@@ -145,6 +145,11 @@
       "type": "CheckBox",
       "name": "MaintenanceMode",
       "caption": "Wartungsmodus – automatische Wiederherstellung sperren"
+    },
+    {
+      "type": "CheckBox",
+      "name": "AllowPackageListRefresh",
+      "caption": "APT-Paketlisten manuell aktualisieren erlauben (keine Installation; eingeschränkte Berechtigung erforderlich)"
     }
   ],
   "actions": [
