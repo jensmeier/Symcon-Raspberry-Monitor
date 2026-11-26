@@ -150,6 +150,11 @@
       "type": "CheckBox",
       "name": "AllowPackageListRefresh",
       "caption": "APT-Paketlisten manuell aktualisieren erlauben (keine Installation; eingeschränkte Berechtigung erforderlich)"
+    },
+    {
+      "type": "CheckBox",
+      "name": "AllowCoordinatorSelection",
+      "caption": "Koordinatorzuordnung in vertrauenswürdiger TileVisu erlauben"
     }
   ],
   "actions": [
