@@ -86,6 +86,31 @@ class RaspberryMonitor extends IPSModule
     public function RequestAction($Ident, $Value)
     {
         switch ($Ident) {
+            case 'UI.Diagnostic':
+                try {
+                    $p = json_decode((string)$Value, true, 8, JSON_THROW_ON_ERROR);
+                    $item = $this->deviceByIP((string)($p['ip'] ?? ''));
+                    $commands = [
+                        'usb' => 'lsusb; ls -l /dev/serial/by-id/ 2>/dev/null',
+                        'network' => 'ip -br addr; ip route',
+                        'memory' => 'free -h; swapon --show',
+                        'disk' => 'df -h; lsblk -o NAME,SIZE,TYPE,MOUNTPOINT',
+                        'failed' => 'systemctl --failed --no-pager',
+                        'errors' => 'journalctl -p err -n 80 --no-pager',
+                        'zigbee' => 'journalctl -u zigbee2mqtt -n 80 --no-pager',
+                        'symcon' => 'journalctl -u symcon -n 80 --no-pager',
+                        'packages' => 'LC_ALL=C apt-get -s upgrade',
+                        'autoremove' => 'LC_ALL=C apt-get -s autoremove'
+                    ];
+                    $name = (string)($p['command'] ?? '');
+                    if (!isset($commands[$name])) throw new Exception('Befehl nicht freigegeben');
+                    $ip = (string)$item['ip'];
+                    [$ok,$out] = $this->run($commands[$name], ($item['mode'] ?? 'ssh') !== 'local', $ip, (string)($item['user'] ?? 'pi'), (string)($item['key'] ?? ''));
+                    $this->UpdateVisualizationValue(json_encode(['diagnostic'=>['ip'=>$ip,'command'=>$name,'ok'=>$ok,'output'=>substr($out,0,24000)]], JSON_INVALID_UTF8_SUBSTITUTE | JSON_UNESCAPED_UNICODE));
+                } catch (Throwable $e) {
+                    $this->UpdateVisualizationValue(json_encode(['diagnostic'=>['ok'=>false,'output'=>$e->getMessage()]], JSON_INVALID_UTF8_SUBSTITUTE));
+                }
+                return;
             case 'UI.Refresh':
                 $this->Refresh();
                 $this->SetValue('Feedback', 'Alle Systeme aktualisiert.');
@@ -636,7 +661,7 @@ class RaspberryMonitor extends IPSModule
         $history = array_intersect_key($history, array_flip($configured));
         $this->SetBuffer('MetricsHistory', json_encode($history, JSON_UNESCAPED_UNICODE));
         $this->SetValue('StatusJSON', json_encode(['at' => date(DATE_ATOM), 'devices' => $states, 'history' => $history, 'restartJobs' => $restartJobs, 'brokerMQTT' => $brokerCheck, 'events' => array_reverse($eventLog), 'restartEnabled' => $this->ReadPropertyBoolean('AllowRestart'), 'serviceRestartEnabled' => $this->ReadPropertyBoolean('AllowServiceRestart')], JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT));
-        $lines = ['Raspberry Monitor 1.3 – '.date('d.m.Y H:i:s')];
+        $lines = ['Raspberry Monitor 3.0-dev – '.date('d.m.Y H:i:s')];
         foreach ($states as $s) {
             $lines[] = sprintf('%s (%s): %s | OS: %s | Kernel: %s | CPU: %s | RAM: %s | HDD: %s | Updates: %s | Dienst: %s',
                 $s['name'], $s['ip'], $s['online'] ? 'ONLINE' : 'OFFLINE', $s['os'], $s['kernel'], $s['temp'], $s['ram'], $s['disk'], $s['updates'], $s['service']);
@@ -662,6 +687,9 @@ class RaspberryMonitor extends IPSModule
     private function run(string $cmd, bool $remote, string $ip, string $user, string $key): array
     {
         if ($remote) {
+            if (!filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) || !$this->privateLAN($ip) ||
+                !preg_match('/^[a-z_][a-z0-9_-]{0,31}$/', $user) ||
+                !preg_match('#^/[a-zA-Z0-9/_\.\-]+$#', $key)) return [false, 'Ungültige SSH-Konfiguration'];
             $ssh = '/usr/bin/ssh -n -T -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=3 -o ConnectionAttempts=1 -o ServerAliveInterval=3 -o ServerAliveCountMax=1';
             $cmd = $ssh.' -i '.escapeshellarg($key).' '.escapeshellarg($user.'@'.$ip).' '.escapeshellarg($cmd);
         }
@@ -686,14 +714,42 @@ class RaspberryMonitor extends IPSModule
         // Genau ein kurzer SSH-Aufruf pro Raspberry; Ausgabe auf feste Zeilenzahl beschränkt.
         $read = <<<'SH'
 LC_ALL=C; echo "OS=$(sed -n 's/^PRETTY_NAME=//p' /etc/os-release | head -n1 | tr -d '"')"; echo "KERNEL=$(uname -r)"; echo "TEMP=$(cat /sys/class/thermal/thermal_zone0/temp 2>/dev/null || echo NA)"; echo "RAM=$(awk '/MemTotal:/ {t=$2} /MemAvailable:/ {a=$2} END {if(t>0) printf "%.0f%%",(t-a)*100/t; else print "NA"}' /proc/meminfo)"; echo "DISK=$(df -P / | awk 'NR==2 {print $5}')"; echo "DISKFREE=$(df -Pk / | awk 'NR==2 {printf "%.1f GB", $4/1048576}')"; echo "UPTIME=$(uptime -p)"; echo "UPDATES=$(LC_ALL=C apt-get -s upgrade 2>/dev/null | awk '/^Inst / {n++} END {print n+0}')"; echo "SERVICE=$(systemctl is-active zigbee2mqtt 2>/dev/null || true)"; echo "SYMD=$(if pgrep -x symcon >/dev/null 2>&1; then echo active; else systemctl is-active symcon >/dev/null 2>&1 && echo failed || echo inactive; fi)"; echo "NODE=$(node -v 2>/dev/null || true)"; echo "Z2MV=$(grep -m1 version /opt/zigbee2mqtt/package.json 2>/dev/null | tr -cd 0-9.)"
+echo "THROTTLED=$(vcgencmd get_throttled 2>/dev/null | cut -d= -f2)"
+echo "LOAD=$(cut -d' ' -f1-3 /proc/loadavg)"
+echo "FAN=$(for f in /sys/class/hwmon/hwmon*/fan1_input; do if [ -r "$f" ]; then cat "$f"; break; fi; done)"
+echo "SERIAL=$(if [ -d /dev/serial/by-id ]; then find /dev/serial/by-id -maxdepth 1 -type l -exec test -e {} \\; -print | wc -l; else echo 0; fi)"
+echo "REBOOT=$(if [ -f /run/reboot-required ]; then echo yes; else echo no; fi)"
 SH;
         [$ok, $output] = $this->run($read, $remote, $ip, $user, $key);
         if (!$ok) { $state['error'] = substr($output, 0, 220); return $state; }
         $state['online'] = true;
+        if (!$remote) {
+            $state['phpVersion'] = PHP_VERSION;
+            $state['symconVersion'] = IPS_GetKernelVersion();
+            $state['phpMemory'] = round(memory_get_usage(true) / 1048576, 1);
+            if (function_exists('opcache_get_status')) {
+                $cache = @opcache_get_status(false);
+                if (is_array($cache)) $state['opcache'] = ($cache['opcache_enabled'] ?? false) ? 'Aktiv' : 'Inaktiv';
+            }
+        }
         foreach (explode("\n", $output) as $line) {
             if (!str_contains($line, '=')) continue;
             [$k, $v] = explode('=', $line, 2);
             $v = substr(trim($v), 0, 120);
+            if ($k === 'THROTTLED' && preg_match('/^0x[0-9a-f]+$/i', $v)) {
+                $bits = hexdec(substr($v, 2));
+                $state['throttled'] = $v;
+                $state['undervoltage'] = ($bits & 1) !== 0;
+                $state['cpuThrottling'] = ($bits & 4) !== 0;
+                $state['undervoltageHistory'] = ($bits & 65536) !== 0;
+                $state['throttlingHistory'] = ($bits & 262144) !== 0;
+                if ($state['undervoltage']) $state['warnings'][] = 'Unterspannung aktuell';
+                if ($state['cpuThrottling']) $state['warnings'][] = 'CPU-Drosselung aktuell';
+            }
+            if ($k === 'LOAD') $state['load'] = $v;
+            if ($k === 'FAN' && ctype_digit($v)) $state['fanRPM'] = (int)$v;
+            if ($k === 'SERIAL' && ctype_digit($v)) $state['serialCount'] = (int)$v;
+            if ($k === 'REBOOT') $state['rebootRequired'] = $v === 'yes';
             if ($k === 'OS') $state['os'] = $v;
             if ($k === 'KERNEL') $state['kernel'] = $v;
             if ($k === 'RAM') $state['ram'] = $v;
