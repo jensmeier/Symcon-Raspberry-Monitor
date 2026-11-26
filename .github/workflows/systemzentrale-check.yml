@@ -1,0 +1,26 @@
+name: Systemzentrale checks
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.5'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: find . -name '*.php' -print0 | xargs -0 -r -n1 php -l
+      - run: |
+          python3 - <<'PY'
+          import json, pathlib, re
+          for p in pathlib.Path('.').rglob('*.json'):
+              json.loads(p.read_text())
+          h = pathlib.Path('RaspberryMonitor/monitor.html').read_text()
+          s = re.search(r'<script>(.*?)</script>', h, re.S).group(1)
+          pathlib.Path('/tmp/tile.js').write_text(s.replace('__INITIAL_STATE__', '{}'))
+          PY
+          node --check /tmp/tile.js

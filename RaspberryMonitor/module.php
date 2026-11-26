@@ -17,6 +17,17 @@ class RaspberryMonitor extends IPSModule
             ['name' => 'Zigbee-Raspberry', 'ip' => '192.168.178.90', 'mode' => 'ssh', 'user' => 'pi', 'key' => '/root/.ssh/symcon_zigbee']
         ]));
         $this->RegisterPropertyInteger('Interval', 5);
+        $this->RegisterPropertyString('CoordinatorPath', '');
+        $this->RegisterPropertyString('ZigbeeServerIP', '192.168.178.90');
+        $this->RegisterPropertyBoolean('AutoRecoverZigbee', false);
+        $this->RegisterPropertyBoolean('MaintenanceMode', false);
+        $this->RegisterPropertyBoolean('AllowPackageListRefresh', false);
+        $this->RegisterAttributeString('PackageJobs', '{}');
+        $this->RegisterAttributeString('LongHistory', '{}');
+        $this->RegisterAttributeString('RecoveryState', '{}');
+        $this->RegisterVariableBoolean('SystemHealthy', 'Systemstatus');
+        $this->RegisterVariableString('ActiveFaults', 'Aktive Störungen');
+        $this->RegisterVariableInteger('LastSuccessfulCheck', 'Letzte erfolgreiche Gesamtprüfung', '~UnixTimestamp');
         $this->RegisterPropertyBoolean('AllowRestart', false);
         $this->RegisterPropertyBoolean('AllowServiceRestart', false);
         $this->RegisterPropertyInteger('ScanStart', 1);
@@ -78,6 +89,8 @@ class RaspberryMonitor extends IPSModule
         $data["found"] = $this->GetValue("Found");
         $data['restartEnabled'] = $this->ReadPropertyBoolean('AllowRestart');
         $data['serviceRestartEnabled'] = $this->ReadPropertyBoolean('AllowServiceRestart');
+        $data['packageListRefreshEnabled'] = $this->ReadPropertyBoolean('AllowPackageListRefresh');
+        $data['packageJobs'] = json_decode($this->ReadAttributeString('PackageJobs'), true) ?: [];
         $data['restartJobs'] = json_decode($this->GetBuffer('RestartJobs'), true) ?: [];
         $data['events'] = array_reverse(json_decode($this->GetBuffer('MonitorEvents'), true) ?: []);
         $this->UpdateVisualizationValue(json_encode($data, JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE));
@@ -86,6 +99,67 @@ class RaspberryMonitor extends IPSModule
     public function RequestAction($Ident, $Value)
     {
         switch ($Ident) {
+            case 'UI.PackageLists':
+                try {
+                    if (!$this->ReadPropertyBoolean('AllowPackageListRefresh')) throw new Exception('Paketlisten-Aktualisierung ist in der Instanzkonfiguration gesperrt.');
+                    $this->startPackageListJob((string)$Value);
+                } catch (Throwable $e) {
+                    $this->SetValue('Feedback','Paketlisten: '.$e->getMessage());
+                    $this->pushUI();
+                }
+                return;
+            case 'UI.PackageJob':
+                try {
+                    $ip = (string)$Value;
+                    $this->deviceByIP($ip);
+                    $this->pollPackageJobs();
+                    $jobs = json_decode($this->ReadAttributeString('PackageJobs'),true) ?: [];
+                    $this->UpdateVisualizationValue(json_encode(['packageJob'=>$jobs[$ip] ?? ['ip'=>$ip,'status'=>'none','output'=>'Kein Vorgang vorhanden']],JSON_INVALID_UTF8_SUBSTITUTE));
+                } catch(Throwable $e) {
+                    $this->SetValue('Feedback',$e->getMessage());
+                    $this->pushUI();
+                }
+                return;
+            case 'UI.History':
+                try {
+                    $p = json_decode((string)$Value,true,8,JSON_THROW_ON_ERROR);
+                    $ip = (string)($p['ip'] ?? '');
+                    $this->deviceByIP($ip);
+                    $days = (int)($p['days'] ?? 1);
+                    if (!in_array($days,[1,7,30],true)) throw new Exception('Ungültiger Zeitraum');
+                    $history = json_decode($this->ReadAttributeString('LongHistory'),true) ?: [];
+                    $rows = array_values(array_filter($history[$ip] ?? [],static fn($r)=>($r['t'] ?? 0)>=time()-$days*86400));
+                    $this->UpdateVisualizationValue(json_encode(['historyReport'=>['ip'=>$ip,'days'=>$days,'rows'=>$rows]],JSON_INVALID_UTF8_SUBSTITUTE));
+                } catch(Throwable $e) {
+                    $this->SetValue('Feedback',$e->getMessage());
+                    $this->pushUI();
+                }
+                return;
+            case 'UI.Diagnostic':
+                try {
+                    $p = json_decode((string)$Value, true, 8, JSON_THROW_ON_ERROR);
+                    $item = $this->deviceByIP((string)($p['ip'] ?? ''));
+                    $commands = [
+                        'usb' => 'lsusb; ls -l /dev/serial/by-id/ 2>/dev/null',
+                        'network' => 'ip -br addr; ip route',
+                        'memory' => 'free -h; swapon --show',
+                        'disk' => 'df -h; lsblk -o NAME,SIZE,TYPE,MOUNTPOINT',
+                        'failed' => 'systemctl --failed --no-pager',
+                        'errors' => 'journalctl -p err -n 80 --no-pager',
+                        'zigbee' => 'journalctl -u zigbee2mqtt -n 80 --no-pager',
+                        'symcon' => 'journalctl -u symcon -n 80 --no-pager',
+                        'packages' => 'LC_ALL=C apt-get -s upgrade',
+                        'autoremove' => 'LC_ALL=C apt-get -s autoremove'
+                    ];
+                    $name = (string)($p['command'] ?? '');
+                    if (!isset($commands[$name])) throw new Exception('Befehl nicht freigegeben');
+                    $ip = (string)$item['ip'];
+                    [$ok,$out] = $this->run($commands[$name], ($item['mode'] ?? 'ssh') !== 'local', $ip, (string)($item['user'] ?? 'pi'), (string)($item['key'] ?? ''));
+                    $this->UpdateVisualizationValue(json_encode(['diagnostic'=>['ip'=>$ip,'command'=>$name,'ok'=>$ok,'output'=>substr($out,0,24000)]], JSON_INVALID_UTF8_SUBSTITUTE | JSON_UNESCAPED_UNICODE));
+                } catch (Throwable $e) {
+                    $this->UpdateVisualizationValue(json_encode(['diagnostic'=>['ok'=>false,'output'=>$e->getMessage()]], JSON_INVALID_UTF8_SUBSTITUTE));
+                }
+                return;
             case 'UI.Refresh':
                 $this->Refresh();
                 $this->SetValue('Feedback', 'Alle Systeme aktualisiert.');
@@ -208,6 +282,7 @@ class RaspberryMonitor extends IPSModule
                     if (!$this->ReadPropertyBoolean('AllowServiceRestart')) throw new Exception('Dienstneustarts sind in der Instanzkonfiguration gesperrt.');
                     $ip = (string)$Value;
                     $item = $this->deviceByIP($ip);
+                    if (($item['mode'] ?? 'ssh') !== 'local' && $ip !== $this->ReadPropertyString('ZigbeeServerIP')) throw new Exception('Kein verwalteter Dienst für diesen Rechner konfiguriert');
                     $service = ($item['mode'] ?? 'ssh') === 'local' ? 'symcon' : 'zigbee2mqtt';
                     $ticket = bin2hex(random_bytes(16));
                     $this->SetBuffer('ServiceRestartTicket', json_encode(['ip'=>$ip,'service'=>$service,'token'=>$ticket,'expires'=>time()+60]));
@@ -576,7 +651,7 @@ class RaspberryMonitor extends IPSModule
             $bridge['label'] = 'Bridge-Statusvariable '.$bridgeID.' nicht gefunden';
         }
         foreach ($states as &$state) {
-            if (($state['service'] ?? '') === 'active') {
+            if (($state['isZigbee'] ?? false)) {
                 $state['bridgeMQTT'] = $bridge;
                 if ($bridge['status'] === 'error') $state['warnings'][] = 'Zigbee2MQTT-Bridge meldet Störung';
                 // Ein frischer Bridge-Wert ist ein Indikator, kein eigener MQTT-CONNACK-Test.
@@ -584,6 +659,16 @@ class RaspberryMonitor extends IPSModule
         }
         unset($state);
         $brokerCheck = $this->probeMQTTBroker($this->ReadPropertyString('MQTTBrokerIP'), $this->ReadPropertyInteger('MQTTBrokerPort'));
+        $this->pollPackageJobs();
+        $this->recoverZigbee($states);
+        $faults = [];
+        foreach ($states as $st) {
+            if (!$st['online']) $faults[] = $st['name'].': Systemdaten nicht erreichbar';
+            foreach ($st['warnings'] as $warning) $faults[] = $st['name'].': '.$warning;
+        }
+        $this->SetValue('SystemHealthy', count($states)>0 && !$faults);
+        $this->SetValue('ActiveFaults', implode("\n", $faults));
+        if ($states && !in_array(false, array_column($states, 'online'), true)) $this->SetValue('LastSuccessfulCheck', time());
         // Zustandswechsel nur bei Änderung protokollieren: höchstens 100 Meldungen.
         $eventLog = json_decode($this->GetBuffer('MonitorEvents'), true);
         if (!is_array($eventLog)) $eventLog = [];
@@ -616,27 +701,29 @@ class RaspberryMonitor extends IPSModule
         $eventLog = array_slice($eventLog, -100);
         $this->SetBuffer('MonitorEvents', json_encode($eventLog, JSON_UNESCAPED_UNICODE));
         // Begrenzte, interne Messhistorie: keine zusätzlichen Symcon-Variablen.
-        $history = json_decode($this->GetBuffer('MetricsHistory'), true);
-        if (!is_array($history)) $history = [];
+        $history = json_decode($this->ReadAttributeString('LongHistory'), true);
+        if (!is_array($history) || !$history) $history = json_decode($this->GetBuffer('MetricsHistory'), true) ?: [];
         $now = time();
         foreach ($states as $deviceState) {
             $ip = (string)($deviceState['ip'] ?? '');
             if ($ip === '' || !($deviceState['online'] ?? false)) continue;
             $tempRaw = str_replace(',', '.', (string)($deviceState['temp'] ?? ''));
-            $entry = ['t' => $now, 'temp' => is_numeric(preg_replace('/[^0-9.]/', '', $tempRaw)) ? (float)preg_replace('/[^0-9.]/', '', $tempRaw) : null,
+            $entry = ['t' => $now, 'cpu' => $deviceState['cpuPercent'] ?? null, 'temp' => is_numeric(preg_replace('/[^0-9.]/', '', $tempRaw)) ? (float)preg_replace('/[^0-9.]/', '', $tempRaw) : null,
                 'disk' => is_numeric(rtrim((string)($deviceState['disk'] ?? ''), '%')) ? (int)rtrim((string)$deviceState['disk'], '%') : null,
                 'ram' => is_numeric(rtrim((string)($deviceState['ram'] ?? ''), '%')) ? (int)rtrim((string)$deviceState['ram'], '%') : null];
             $samples = $history[$ip] ?? [];
             if (!is_array($samples)) $samples = [];
             $last = end($samples);
             if (!is_array($last) || ($now - (int)($last['t'] ?? 0)) >= 240) $samples[] = $entry;
-            $history[$ip] = array_slice($samples, -288);
+            $history[$ip] = array_slice(array_values(array_filter($samples, static fn($p) => (int)($p['t'] ?? 0) >= $now-30*86400)), -10800);
         }
         $configured = array_column($states, 'ip');
         $history = array_intersect_key($history, array_flip($configured));
-        $this->SetBuffer('MetricsHistory', json_encode($history, JSON_UNESCAPED_UNICODE));
+        $this->WriteAttributeString('LongHistory', json_encode($history, JSON_UNESCAPED_UNICODE));
+        // Tile messages carry only a bounded overview; long-range data is requested separately.
+        $history = array_map(static fn($rows) => array_slice($rows,-288), $history);
         $this->SetValue('StatusJSON', json_encode(['at' => date(DATE_ATOM), 'devices' => $states, 'history' => $history, 'restartJobs' => $restartJobs, 'brokerMQTT' => $brokerCheck, 'events' => array_reverse($eventLog), 'restartEnabled' => $this->ReadPropertyBoolean('AllowRestart'), 'serviceRestartEnabled' => $this->ReadPropertyBoolean('AllowServiceRestart')], JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT));
-        $lines = ['Raspberry Monitor 1.3 – '.date('d.m.Y H:i:s')];
+        $lines = ['Raspberry Monitor 3.0-dev – '.date('d.m.Y H:i:s')];
         foreach ($states as $s) {
             $lines[] = sprintf('%s (%s): %s | OS: %s | Kernel: %s | CPU: %s | RAM: %s | HDD: %s | Updates: %s | Dienst: %s',
                 $s['name'], $s['ip'], $s['online'] ? 'ONLINE' : 'OFFLINE', $s['os'], $s['kernel'], $s['temp'], $s['ram'], $s['disk'], $s['updates'], $s['service']);
@@ -662,6 +749,9 @@ class RaspberryMonitor extends IPSModule
     private function run(string $cmd, bool $remote, string $ip, string $user, string $key): array
     {
         if ($remote) {
+            if (!filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) || !$this->privateLAN($ip) ||
+                !preg_match('/^[a-z_][a-z0-9_-]{0,31}$/', $user) ||
+                !preg_match('#^/[a-zA-Z0-9/_\.\-]+$#', $key)) return [false, 'Ungültige SSH-Konfiguration'];
             $ssh = '/usr/bin/ssh -n -T -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=3 -o ConnectionAttempts=1 -o ServerAliveInterval=3 -o ServerAliveCountMax=1';
             $cmd = $ssh.' -i '.escapeshellarg($key).' '.escapeshellarg($user.'@'.$ip).' '.escapeshellarg($cmd);
         }
@@ -669,6 +759,90 @@ class RaspberryMonitor extends IPSModule
         exec('/usr/bin/timeout -k 2s 25s /bin/sh -c '.escapeshellarg($cmd).' 2>&1', $output, $code);
         if ($code === 124 || $code === 137) return [false, 'Zeitüberschreitung bei Systemabfrage'];
         return [$code === 0, trim(implode("\n", $output))];
+    }
+
+    private function startPackageListJob(string $ip): void
+    {
+        $d = $this->deviceByIP($ip);
+        $lock = 'SRM.PackageJobs.'.$this->InstanceID;
+        if (!IPS_SemaphoreEnter($lock,0)) throw new Exception('Wartungsverwaltung belegt');
+        try {
+            $jobs = json_decode($this->ReadAttributeString('PackageJobs'),true) ?: [];
+            foreach ($jobs as $j) if (in_array($j['status'] ?? '', ['starting','running','unknown'],true)) throw new Exception('Ein Wartungsvorgang ist noch nicht abgeschlossen oder nicht überprüfbar');
+            $unit = 'srm-apt-lists-'.bin2hex(random_bytes(8));
+            $remote = ($d['mode'] ?? 'ssh') !== 'local';
+            // Separate transient unit survives SSH/PHP disconnect. No package installation.
+            // Do not use --collect: terminal status must remain observable until acknowledged.
+            $jobs[$ip] = ['ip'=>$ip,'unit'=>$unit,'status'=>'starting','started'=>time(),'output'=>'Auftrag wird übergeben'];
+            $this->WriteAttributeString('PackageJobs',json_encode($jobs));
+            $prefix = $remote ? 'sudo -n ' : '';
+            $cmd = $prefix.'/usr/bin/systemd-run --unit='.escapeshellarg($unit).' --property=Type=oneshot --property=RemainAfterExit=yes --property=TimeoutStartSec=600 --no-block /usr/bin/apt-get -o APT::Update::Error-Mode=any update';
+            [$ok,$out] = $this->run($cmd,$remote,$ip,(string)($d['user'] ?? 'pi'),(string)($d['key'] ?? ''));
+            $jobs[$ip]['status'] = $ok ? 'running' : 'unknown';
+            $jobs[$ip]['output'] = substr($out,0,2400);
+            $this->WriteAttributeString('PackageJobs',json_encode($jobs,JSON_INVALID_UTF8_SUBSTITUTE));
+            $this->SetValue('Feedback',$ok?'Paketlisten-Auftrag übergeben; Ergebnis noch offen':'Übergabe nicht bestätigt; Dienststatus prüfen');
+            $this->pushUI();
+        } finally {
+            IPS_SemaphoreLeave($lock);
+        }
+    }
+
+    private function pollPackageJobs(): void
+    {
+        $lock = 'SRM.PackageJobs.'.$this->InstanceID;
+        if (!IPS_SemaphoreEnter($lock,0)) return;
+        try {
+            $jobs = json_decode($this->ReadAttributeString('PackageJobs'),true) ?: [];
+            foreach ($jobs as $ip=>&$j) {
+                if (!in_array($j['status'] ?? '', ['starting','running','unknown'],true)) continue;
+                if (!preg_match('/^srm-apt-lists-[0-9a-f]{16}$/D',(string)($j['unit'] ?? ''))) continue;
+                try {
+                    $d = $this->deviceByIP((string)$ip);
+                    $remote = ($d['mode'] ?? 'ssh') !== 'local';
+                    $unit = escapeshellarg($j['unit'].'.service');
+                    [$ok,$out] = $this->run('systemctl show '.$unit.' -p LoadState -p ActiveState -p SubState -p Result -p ExecMainStatus -p ExecMainCode; journalctl -u '.$unit.' -n 80 --no-pager',$remote,(string)$ip,(string)($d['user'] ?? 'pi'),(string)($d['key'] ?? ''));
+                    if (!$ok) { $j['status']='unknown'; continue; }
+                    $j['output']=substr($out,0,16000);
+                    if (preg_match('/^LoadState=loaded$/m',$out) && preg_match('/^ActiveState=active$/m',$out) && preg_match('/^SubState=exited$/m',$out) && preg_match('/^Result=success$/m',$out) && preg_match('/^ExecMainStatus=0$/m',$out) && preg_match('/^ExecMainCode=1$/m',$out)) $j['status']='success';
+                    elseif (preg_match('/^ActiveState=failed$/m',$out)) $j['status']='failed';
+                    elseif (preg_match('/^LoadState=not-found$/m',$out)) $j['status']='unknown';
+                    else $j['status']='running';
+                } catch(Throwable $e) { $j['status']='unknown'; $j['output']=$e->getMessage(); }
+            }
+            unset($j);
+            $this->WriteAttributeString('PackageJobs',json_encode($jobs,JSON_INVALID_UTF8_SUBSTITUTE));
+        } finally { IPS_SemaphoreLeave($lock); }
+    }
+
+    private function recoverZigbee(array $states): void
+    {
+        if (!$this->ReadPropertyBoolean('AutoRecoverZigbee') || !$this->ReadPropertyBoolean('AllowServiceRestart') || $this->ReadPropertyBoolean('MaintenanceMode')) return;
+        $packageJobs = json_decode($this->ReadAttributeString('PackageJobs'),true) ?: [];
+        foreach ($packageJobs as $j) if (in_array($j['status'] ?? '', ['starting','running','unknown'],true)) return;
+        $record = json_decode($this->ReadAttributeString('RecoveryState'),true) ?: [];
+        foreach ($states as $s) {
+            if (!($s['isZigbee'] ?? false)) continue;
+            $ip = $s['ip'];
+            $r = $record[$ip] ?? ['failures'=>0,'lastAttempt'=>0];
+            // Only a verified configured character device permits recovery.
+            if (!$s['online'] || ($s['coordinator'] ?? '') !== 'present' || !in_array($s['service'],['failed','inactive'],true)) {
+                $r['failures'] = 0;
+            } else {
+                $r['failures']++;
+                if ($r['failures'] >= 2 && time()-(int)$r['lastAttempt'] >= 3600) {
+                    $r['lastAttempt'] = time();
+                    $r['failures'] = 0;
+                    $record[$ip] = $r;
+                    $this->WriteAttributeString('RecoveryState',json_encode($record));
+                    $d = $this->deviceByIP($ip);
+                    [$ok,$out] = $this->run('sudo -n /usr/bin/systemctl restart zigbee2mqtt',true,$ip,(string)($d['user'] ?? 'pi'),(string)($d['key'] ?? ''));
+                    $this->LogMessage('Automatische Zigbee-Wiederherstellung: '.($ok?'Befehl angenommen; Folgemessung erforderlich':substr($out,0,180)),KL_WARNING);
+                }
+            }
+            $record[$ip] = $r;
+        }
+        $this->WriteAttributeString('RecoveryState',json_encode($record));
     }
 
     private function readDevice(array $device): array
@@ -686,14 +860,64 @@ class RaspberryMonitor extends IPSModule
         // Genau ein kurzer SSH-Aufruf pro Raspberry; Ausgabe auf feste Zeilenzahl beschränkt.
         $read = <<<'SH'
 LC_ALL=C; echo "OS=$(sed -n 's/^PRETTY_NAME=//p' /etc/os-release | head -n1 | tr -d '"')"; echo "KERNEL=$(uname -r)"; echo "TEMP=$(cat /sys/class/thermal/thermal_zone0/temp 2>/dev/null || echo NA)"; echo "RAM=$(awk '/MemTotal:/ {t=$2} /MemAvailable:/ {a=$2} END {if(t>0) printf "%.0f%%",(t-a)*100/t; else print "NA"}' /proc/meminfo)"; echo "DISK=$(df -P / | awk 'NR==2 {print $5}')"; echo "DISKFREE=$(df -Pk / | awk 'NR==2 {printf "%.1f GB", $4/1048576}')"; echo "UPTIME=$(uptime -p)"; echo "UPDATES=$(LC_ALL=C apt-get -s upgrade 2>/dev/null | awk '/^Inst / {n++} END {print n+0}')"; echo "SERVICE=$(systemctl is-active zigbee2mqtt 2>/dev/null || true)"; echo "SYMD=$(if pgrep -x symcon >/dev/null 2>&1; then echo active; else systemctl is-active symcon >/dev/null 2>&1 && echo failed || echo inactive; fi)"; echo "NODE=$(node -v 2>/dev/null || true)"; echo "Z2MV=$(grep -m1 version /opt/zigbee2mqtt/package.json 2>/dev/null | tr -cd 0-9.)"
+echo "THROTTLED=$(vcgencmd get_throttled 2>/dev/null | cut -d= -f2)"
+echo "LOAD=$(cut -d' ' -f1-3 /proc/loadavg)"
+echo "FAN=$(for f in /sys/class/hwmon/hwmon*/fan1_input; do if [ -r "$f" ]; then cat "$f"; break; fi; done)"
+echo "CPU=$(awk '/^cpu / {print $2,$3,$4,$5,$6,$7,$8,$9; exit}' /proc/stat)"
+echo "SWAP=$(awk '/SwapTotal:/ {t=$2} /SwapFree:/ {f=$2} END {if(t>0) printf \"%.0f%%\",(t-f)*100/t; else print \"0%%\"}' /proc/meminfo)"
+echo "SERIAL=$(if [ -d /dev/serial/by-id ]; then find /dev/serial/by-id -maxdepth 1 -type l -exec test -e {} \; -print | wc -l; else echo 0; fi)"
+echo "REBOOT=$(if [ -f /run/reboot-required ]; then echo yes; else echo no; fi)"
 SH;
+        $isZigbee = $remote && $ip === $this->ReadPropertyString('ZigbeeServerIP');
+        $coordinator = $this->ReadPropertyString('CoordinatorPath');
+        if ($isZigbee && preg_match('#^/dev/(?:serial/by-id/[A-Za-z0-9_.:+-]+|tty(?:USB|ACM|AMA)[0-9]+)$#D', $coordinator)) {
+            $read .= "\nif test -c ".escapeshellarg($coordinator)."; then echo COORD=present; else echo COORD=missing; fi";
+        }
+        $state['isZigbee'] = $isZigbee;
         [$ok, $output] = $this->run($read, $remote, $ip, $user, $key);
         if (!$ok) { $state['error'] = substr($output, 0, 220); return $state; }
         $state['online'] = true;
+        if (!$remote) {
+            $state['phpVersion'] = PHP_VERSION;
+            $state['symconVersion'] = IPS_GetKernelVersion();
+            $state['phpMemory'] = round(memory_get_usage(true) / 1048576, 1);
+            if (function_exists('opcache_get_status')) {
+                $cache = @opcache_get_status(false);
+                if (is_array($cache)) $state['opcache'] = ($cache['opcache_enabled'] ?? false) ? 'Aktiv' : 'Inaktiv';
+            }
+        }
         foreach (explode("\n", $output) as $line) {
             if (!str_contains($line, '=')) continue;
             [$k, $v] = explode('=', $line, 2);
             $v = substr(trim($v), 0, 120);
+            if ($k === 'THROTTLED' && preg_match('/^0x[0-9a-f]+$/i', $v)) {
+                $bits = hexdec(substr($v, 2));
+                $state['throttled'] = $v;
+                $state['undervoltage'] = ($bits & 1) !== 0;
+                $state['cpuThrottling'] = ($bits & 4) !== 0;
+                $state['undervoltageHistory'] = ($bits & 65536) !== 0;
+                $state['throttlingHistory'] = ($bits & 262144) !== 0;
+                if ($state['undervoltage']) $state['warnings'][] = 'Unterspannung aktuell';
+                if ($state['cpuThrottling']) $state['warnings'][] = 'CPU-Drosselung aktuell';
+            }
+            if ($k === 'CPU' && preg_match('/^\d+(?: \d+){7}$/D', $v)) {
+                $ticks = array_map('intval', explode(' ', $v));
+                $total = array_sum($ticks);
+                $idle = $ticks[3] + $ticks[4];
+                $all = json_decode($this->GetBuffer('CpuTicks'), true) ?: [];
+                $old = $all[$ip] ?? null;
+                if (is_array($old) && $total > $old[0] && $idle >= $old[1] && $idle-$old[1] <= $total-$old[0]) {
+                    $state['cpuPercent'] = round(100 * (1 - ($idle-$old[1])/($total-$old[0])), 1);
+                }
+                $all[$ip] = [$total,$idle];
+                $this->SetBuffer('CpuTicks', json_encode($all));
+            }
+            if ($k === 'SWAP') $state['swap'] = $v;
+            if ($k === 'COORD') $state['coordinator'] = $v;
+            if ($k === 'LOAD') $state['load'] = $v;
+            if ($k === 'FAN' && ctype_digit($v)) $state['fanRPM'] = (int)$v;
+            if ($k === 'SERIAL' && ctype_digit($v)) $state['serialCount'] = (int)$v;
+            if ($k === 'REBOOT') $state['rebootRequired'] = $v === 'yes';
             if ($k === 'OS') $state['os'] = $v;
             if ($k === 'KERNEL') $state['kernel'] = $v;
             if ($k === 'RAM') $state['ram'] = $v;
@@ -725,6 +949,10 @@ SH;
             }
         } else {
             $state['mqttDiagnosis'] = 'Nicht anwendbar';
+        }
+        if ($isZigbee) {
+            if (($state['coordinator'] ?? '') === 'missing') $state['warnings'][] = 'Konfigurierter Zigbee-Koordinator fehlt';
+            if ($state['service'] !== 'active') $state['warnings'][] = 'Zigbee2MQTT-Dienst nicht aktiv';
         }
         if ($state['diskFree'] === '–') $state['warnings'][] = 'Freier Festplattenspeicher nicht ermittelbar';
         if (!$remote && $state['symconService'] !== 'active') $state['warnings'][] = 'Symcon-Prozess nicht nachgewiesen';
