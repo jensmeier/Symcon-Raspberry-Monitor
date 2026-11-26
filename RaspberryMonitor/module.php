@@ -526,6 +526,19 @@ class RaspberryMonitor extends IPSModule
 
     public function Refresh(): void
     {
+        $lock = "SRM.Refresh." . $this->InstanceID;
+        if (!IPS_SemaphoreEnter($lock, 0)) return;
+        try {
+            $this->refreshInternal();
+        } catch (Throwable $e) {
+            $this->LogMessage("Aktualisierung fehlgeschlagen: " . $e->getMessage(), KL_WARNING);
+        } finally {
+            IPS_SemaphoreLeave($lock);
+        }
+    }
+
+    private function refreshInternal(): void
+    {
         $items = json_decode($this->ReadPropertyString('Devices'), true);
         if (!is_array($items)) {
             $items = [];
@@ -623,7 +636,7 @@ class RaspberryMonitor extends IPSModule
         $history = array_intersect_key($history, array_flip($configured));
         $this->SetBuffer('MetricsHistory', json_encode($history, JSON_UNESCAPED_UNICODE));
         $this->SetValue('StatusJSON', json_encode(['at' => date(DATE_ATOM), 'devices' => $states, 'history' => $history, 'restartJobs' => $restartJobs, 'brokerMQTT' => $brokerCheck, 'events' => array_reverse($eventLog), 'restartEnabled' => $this->ReadPropertyBoolean('AllowRestart'), 'serviceRestartEnabled' => $this->ReadPropertyBoolean('AllowServiceRestart')], JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT));
-        $lines = ['Raspberry Monitor 1.2 – '.date('d.m.Y H:i:s')];
+        $lines = ['Raspberry Monitor 1.3 – '.date('d.m.Y H:i:s')];
         foreach ($states as $s) {
             $lines[] = sprintf('%s (%s): %s | OS: %s | Kernel: %s | CPU: %s | RAM: %s | HDD: %s | Updates: %s | Dienst: %s',
                 $s['name'], $s['ip'], $s['online'] ? 'ONLINE' : 'OFFLINE', $s['os'], $s['kernel'], $s['temp'], $s['ram'], $s['disk'], $s['updates'], $s['service']);
@@ -653,7 +666,8 @@ class RaspberryMonitor extends IPSModule
             $cmd = $ssh.' -i '.escapeshellarg($key).' '.escapeshellarg($user.'@'.$ip).' '.escapeshellarg($cmd);
         }
         $output = []; $code = 1;
-        exec($cmd.' 2>&1', $output, $code);
+        exec('/usr/bin/timeout -k 2s 25s /bin/sh -c '.escapeshellarg($cmd).' 2>&1', $output, $code);
+        if ($code === 124 || $code === 137) return [false, 'Zeitüberschreitung bei Systemabfrage'];
         return [$code === 0, trim(implode("\n", $output))];
     }
 
@@ -671,7 +685,7 @@ class RaspberryMonitor extends IPSModule
         }
         // Genau ein kurzer SSH-Aufruf pro Raspberry; Ausgabe auf feste Zeilenzahl beschränkt.
         $read = <<<'SH'
-LC_ALL=C; echo "OS=$(sed -n 's/^PRETTY_NAME=//p' /etc/os-release | head -n1 | tr -d '"')"; echo "KERNEL=$(uname -r)"; echo "TEMP=$(cat /sys/class/thermal/thermal_zone0/temp 2>/dev/null || echo NA)"; echo "RAM=$(awk '/MemTotal:/ {t=$2} /MemAvailable:/ {a=$2} END {if(t>0) printf "%.0f%%",(t-a)*100/t; else print "NA"}' /proc/meminfo)"; echo "DISK=$(df -P / | awk 'NR==2 {print $5}')"; echo "DISKFREE=$(df -Pk / | awk 'NR==2 {printf \"%.1f GB\", $4/1048576}')"; echo "UPTIME=$(uptime -p)"; echo "UPDATES=$(LC_ALL=C apt-get -s upgrade 2>/dev/null | awk '/^Inst / {n++} END {print n+0}')"; echo "SERVICE=$(systemctl is-active zigbee2mqtt 2>/dev/null || true)"; echo "SYMD=$(systemctl is-active symcon 2>/dev/null || true)"; echo "NODE=$(node -v 2>/dev/null || true)"; echo "Z2MV=$(grep -m1 version /opt/zigbee2mqtt/package.json 2>/dev/null | tr -cd 0-9.)"
+LC_ALL=C; echo "OS=$(sed -n 's/^PRETTY_NAME=//p' /etc/os-release | head -n1 | tr -d '"')"; echo "KERNEL=$(uname -r)"; echo "TEMP=$(cat /sys/class/thermal/thermal_zone0/temp 2>/dev/null || echo NA)"; echo "RAM=$(awk '/MemTotal:/ {t=$2} /MemAvailable:/ {a=$2} END {if(t>0) printf "%.0f%%",(t-a)*100/t; else print "NA"}' /proc/meminfo)"; echo "DISK=$(df -P / | awk 'NR==2 {print $5}')"; echo "DISKFREE=$(df -Pk / | awk 'NR==2 {printf "%.1f GB", $4/1048576}')"; echo "UPTIME=$(uptime -p)"; echo "UPDATES=$(LC_ALL=C apt-get -s upgrade 2>/dev/null | awk '/^Inst / {n++} END {print n+0}')"; echo "SERVICE=$(systemctl is-active zigbee2mqtt 2>/dev/null || true)"; echo "SYMD=$(if pgrep -x symcon >/dev/null 2>&1; then echo active; else systemctl is-active symcon >/dev/null 2>&1 && echo failed || echo inactive; fi)"; echo "NODE=$(node -v 2>/dev/null || true)"; echo "Z2MV=$(grep -m1 version /opt/zigbee2mqtt/package.json 2>/dev/null | tr -cd 0-9.)"
 SH;
         [$ok, $output] = $this->run($read, $remote, $ip, $user, $key);
         if (!$ok) { $state['error'] = substr($output, 0, 220); return $state; }
@@ -684,7 +698,7 @@ SH;
             if ($k === 'KERNEL') $state['kernel'] = $v;
             if ($k === 'RAM') $state['ram'] = $v;
             if ($k === 'DISK') $state['disk'] = $v;
-            if ($k === 'DISKFREE') $state['diskFree'] = $v;
+            if ($k === 'DISKFREE' && preg_match('/^\d+(?:\.\d+)? GB$/', $v)) $state['diskFree'] = $v;
             if ($k === 'UPTIME') $state['uptime'] = $v;
             if ($k === 'UPDATES') $state['updates'] = $v.' (APT-Listen)';
             if ($k === 'SERVICE') $state['service'] = $v;
@@ -712,6 +726,8 @@ SH;
         } else {
             $state['mqttDiagnosis'] = 'Nicht anwendbar';
         }
+        if ($state['diskFree'] === '–') $state['warnings'][] = 'Freier Festplattenspeicher nicht ermittelbar';
+        if (!$remote && $state['symconService'] !== 'active') $state['warnings'][] = 'Symcon-Prozess nicht nachgewiesen';
         $diskPercent = (int) $state['disk'];
         $temp = (float) str_replace(',', '.', $state['temp']);
         if ($diskPercent >= 90) $state['warnings'][] = 'Festplatte kritisch: '.$state['disk'];
@@ -724,7 +740,7 @@ SH;
 
     private function render(array $states): string
     {
-        $html = '<div style="font-family:Arial,sans-serif;background:#f4f7fb;padding:12px;color:#203047"><h2 style="margin:0 0 12px">Raspberry Überwachung <small style="font-size:12px;color:#64748b">0.5 · '.date('d.m.Y H:i').'</small></h2><div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,320px),1fr));gap:14px">';
+        $html = '<div style="font-family:Arial,sans-serif;background:#f4f7fb;padding:12px;color:#203047"><h2 style="margin:0 0 12px">Raspberry Überwachung <small style="font-size:12px;color:#64748b">1.3 · '.date('d.m.Y H:i').'</small></h2><div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,320px),1fr));gap:14px">';
         foreach ($states as $s) {
             $e = static fn($value) => htmlspecialchars((string)$value, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
             $badge = $s['online'] ? '<span style="color:#127444">● ONLINE</span>' : '<span style="color:#b91c1c">● OFFLINE</span>';
