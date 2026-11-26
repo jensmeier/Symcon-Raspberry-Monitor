@@ -859,12 +859,12 @@ class RaspberryMonitor extends IPSModule
         }
         // Genau ein kurzer SSH-Aufruf pro Raspberry; Ausgabe auf feste Zeilenzahl beschränkt.
         $read = <<<'SH'
-LC_ALL=C; echo "OS=$(sed -n 's/^PRETTY_NAME=//p' /etc/os-release | head -n1 | tr -d '"')"; echo "KERNEL=$(uname -r)"; echo "TEMP=$(cat /sys/class/thermal/thermal_zone0/temp 2>/dev/null || echo NA)"; echo "RAM=$(awk '/MemTotal:/ {t=$2} /MemAvailable:/ {a=$2} END {if(t>0) printf "%.0f%%",(t-a)*100/t; else print "NA"}' /proc/meminfo)"; echo "DISK=$(df -P / | awk 'NR==2 {print $5}')"; echo "DISKFREE=$(df -Pk / | awk 'NR==2 {printf "%.1f GB", $4/1048576}')"; echo "UPTIME=$(uptime -p)"; echo "UPDATES=$(LC_ALL=C apt-get -s upgrade 2>/dev/null | awk '/^Inst / {n++} END {print n+0}')"; echo "SERVICE=$(systemctl is-active zigbee2mqtt 2>/dev/null || true)"; echo "SYMD=$(if pgrep -x symcon >/dev/null 2>&1; then echo active; else systemctl is-active symcon >/dev/null 2>&1 && echo failed || echo inactive; fi)"; echo "NODE=$(node -v 2>/dev/null || true)"; echo "Z2MV=$(grep -m1 version /opt/zigbee2mqtt/package.json 2>/dev/null | tr -cd 0-9.)"
+export LC_ALL=C; echo "OS=$(sed -n 's/^PRETTY_NAME=//p' /etc/os-release | head -n1 | tr -d '"')"; echo "KERNEL=$(uname -r)"; echo "TEMP=$(cat /sys/class/thermal/thermal_zone0/temp 2>/dev/null || echo NA)"; echo "RAM=$(awk '/MemTotal:/ {t=$2} /MemAvailable:/ {a=$2} END {if(t>0) printf "%.0f%%",(t-a)*100/t; else print "NA"}' /proc/meminfo)"; df -Pk / | awk 'NR==2 && $2 ~ /^[0-9]+$/ && $3 ~ /^[0-9]+$/ && $4 ~ /^[0-9]+$/ {print "DISK="$5; print "DISK_TOTAL_KIB="$2; print "DISK_USED_KIB="$3; print "DISK_FREE_KIB="$4; print "DISK_DEVICE="$1}' ; echo "UPTIME=$(uptime -p)"; echo "UPDATES=$(LC_ALL=C apt-get -s upgrade 2>/dev/null | awk '/^Inst / {n++} END {print n+0}')"; echo "SERVICE=$(systemctl is-active zigbee2mqtt 2>/dev/null || true)"; echo "SYMD=$(if pgrep -x symcon >/dev/null 2>&1; then echo active; else systemctl is-active symcon >/dev/null 2>&1 && echo failed || echo inactive; fi)"; echo "NODE=$(node -v 2>/dev/null || true)"; echo "Z2MV=$(grep -m1 version /opt/zigbee2mqtt/package.json 2>/dev/null | tr -cd 0-9.)"
 echo "THROTTLED=$(vcgencmd get_throttled 2>/dev/null | cut -d= -f2)"
 echo "LOAD=$(cut -d' ' -f1-3 /proc/loadavg)"
 echo "FAN=$(for f in /sys/class/hwmon/hwmon*/fan1_input; do if [ -r "$f" ]; then cat "$f"; break; fi; done)"
 echo "CPU=$(awk '/^cpu / {print $2,$3,$4,$5,$6,$7,$8,$9; exit}' /proc/stat)"
-echo "SWAP=$(awk '/SwapTotal:/ {t=$2} /SwapFree:/ {f=$2} END {if(t>0) printf \"%.0f%%\",(t-f)*100/t; else print \"0%%\"}' /proc/meminfo)"
+echo "SWAP=$(awk '/SwapTotal:/ {t=$2} /SwapFree:/ {f=$2} END {if(t>0) printf "%.0f%%",(t-f)*100/t; else print "0%%"}' /proc/meminfo)"
 echo "SERIAL=$(if [ -d /dev/serial/by-id ]; then find /dev/serial/by-id -maxdepth 1 -type l -exec test -e {} \; -print | wc -l; else echo 0; fi)"
 echo "REBOOT=$(if [ -f /run/reboot-required ]; then echo yes; else echo no; fi)"
 SH;
@@ -922,7 +922,10 @@ SH;
             if ($k === 'KERNEL') $state['kernel'] = $v;
             if ($k === 'RAM') $state['ram'] = $v;
             if ($k === 'DISK') $state['disk'] = $v;
-            if ($k === 'DISKFREE' && preg_match('/^\d+(?:\.\d+)? GB$/', $v)) $state['diskFree'] = $v;
+            if ($k === 'DISK_TOTAL_KIB' && ctype_digit($v)) $state['diskTotal'] = number_format((float)$v/1048576,1,',','.').' GiB';
+            if ($k === 'DISK_USED_KIB' && ctype_digit($v)) $state['diskUsed'] = number_format((float)$v/1048576,1,',','.').' GiB';
+            if ($k === 'DISK_FREE_KIB' && ctype_digit($v)) $state['diskFree'] = number_format((float)$v/1048576,1,',','.').' GiB';
+            if ($k === 'DISK_DEVICE') $state['diskDevice'] = $v;
             if ($k === 'UPTIME') $state['uptime'] = $v;
             if ($k === 'UPDATES') $state['updates'] = $v.' (APT-Listen)';
             if ($k === 'SERVICE') $state['service'] = $v;
