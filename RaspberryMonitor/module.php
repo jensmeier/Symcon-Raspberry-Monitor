@@ -18,6 +18,7 @@ class RaspberryMonitor extends IPSModule
         ]));
         $this->RegisterPropertyInteger('Interval', 5);
         $this->RegisterPropertyString('CoordinatorPath', '');
+        $this->RegisterPropertyBoolean('AllowCoordinatorSelection', false);
         $this->RegisterPropertyString('ZigbeeServerIP', '192.168.178.90');
         $this->RegisterPropertyBoolean('AutoRecoverZigbee', false);
         $this->RegisterPropertyBoolean('MaintenanceMode', false);
@@ -89,6 +90,7 @@ class RaspberryMonitor extends IPSModule
         $data["found"] = $this->GetValue("Found");
         $data['restartEnabled'] = $this->ReadPropertyBoolean('AllowRestart');
         $data['serviceRestartEnabled'] = $this->ReadPropertyBoolean('AllowServiceRestart');
+        $data['coordinatorSelectionEnabled'] = $this->ReadPropertyBoolean('AllowCoordinatorSelection');
         $data['packageListRefreshEnabled'] = $this->ReadPropertyBoolean('AllowPackageListRefresh');
         $data['packageJobs'] = json_decode($this->ReadAttributeString('PackageJobs'), true) ?: [];
         $data['restartJobs'] = json_decode($this->GetBuffer('RestartJobs'), true) ?: [];
@@ -99,6 +101,22 @@ class RaspberryMonitor extends IPSModule
     public function RequestAction($Ident, $Value)
     {
         switch ($Ident) {
+            case 'UI.CoordinatorSelect':
+                try {
+                    if (!$this->ReadPropertyBoolean('AllowCoordinatorSelection')) throw new Exception('Zuordnung in der Instanzkonfiguration freigeben');
+                    $path = (string)$Value;
+                    if (!preg_match('#^/dev/serial/by-id/[A-Za-z0-9_.:+-]+$#D',$path)) throw new Exception('Ungültiger Gerätepfad');
+                    $ip = $this->ReadPropertyString('ZigbeeServerIP');
+                    $d = $this->deviceByIP($ip);
+                    if (($d['mode'] ?? '') !== 'ssh') throw new Exception('Zigbee-SSH-Gerät erforderlich');
+                    [$ok,$out]=$this->run('test -c '.escapeshellarg($path),true,$ip,(string)($d['user'] ?? 'pi'),(string)($d['key'] ?? ''));
+                    if (!$ok) throw new Exception('Gerät nicht angeschlossen oder nicht prüfbar');
+                    IPS_SetProperty($this->InstanceID,'CoordinatorPath',$path);
+                    IPS_ApplyChanges($this->InstanceID);
+                    $this->SetValue('Feedback','Koordinator zugeordnet');
+                } catch(Throwable $e) { $this->SetValue('Feedback',$e->getMessage()); }
+                $this->pushUI();
+                return;
             case 'UI.PackageLists':
                 try {
                     if (!$this->ReadPropertyBoolean('AllowPackageListRefresh')) throw new Exception('Paketlisten-Aktualisierung ist in der Instanzkonfiguration gesperrt.');
@@ -722,7 +740,7 @@ class RaspberryMonitor extends IPSModule
         $this->WriteAttributeString('LongHistory', json_encode($history, JSON_UNESCAPED_UNICODE));
         // Tile messages carry only a bounded overview; long-range data is requested separately.
         $history = array_map(static fn($rows) => array_slice($rows,-288), $history);
-        $this->SetValue('StatusJSON', json_encode(['at' => date(DATE_ATOM), 'devices' => $states, 'history' => $history, 'restartJobs' => $restartJobs, 'brokerMQTT' => $brokerCheck, 'events' => array_reverse($eventLog), 'restartEnabled' => $this->ReadPropertyBoolean('AllowRestart'), 'serviceRestartEnabled' => $this->ReadPropertyBoolean('AllowServiceRestart')], JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT));
+        $this->SetValue('StatusJSON', json_encode(['at' => date(DATE_ATOM), 'devices' => $states, 'history' => $history, 'restartJobs' => $restartJobs, 'brokerMQTT' => $brokerCheck, 'events' => array_reverse($eventLog), 'coordinatorSelectionEnabled' => $this->ReadPropertyBoolean('AllowCoordinatorSelection'), 'restartEnabled' => $this->ReadPropertyBoolean('AllowRestart'), 'serviceRestartEnabled' => $this->ReadPropertyBoolean('AllowServiceRestart')], JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT));
         $lines = ['Raspberry Monitor 3.0-dev – '.date('d.m.Y H:i:s')];
         foreach ($states as $s) {
             $lines[] = sprintf('%s (%s): %s | OS: %s | Kernel: %s | CPU: %s | RAM: %s | HDD: %s | Updates: %s | Dienst: %s',
@@ -868,7 +886,7 @@ class RaspberryMonitor extends IPSModule
             if (is_array($j)) {
                 $nv = $j['nvme_smart_health_information_log'] ?? [];
                 $data = ['status'=>isset($j['smart_status']['passed'])?($j['smart_status']['passed']?'Bestanden':'Fehler gemeldet'):'Gesundheit unbekannt',
-                    'model'=>$j['model_name'] ?? null,'serial'=>$j['serial_number'] ?? null,'firmware'=>$j['firmware_version'] ?? null,
+                    'rotationRate'=>$j['rotation_rate'] ?? null,'model'=>$j['model_name'] ?? null,'serial'=>$j['serial_number'] ?? null,'firmware'=>$j['firmware_version'] ?? null,
                     'temperature'=>$j['temperature']['current'] ?? $nv['temperature'] ?? null,
                     'hours'=>$j['power_on_time']['hours'] ?? $nv['power_on_hours'] ?? null,
                     'cycles'=>$j['power_cycle_count'] ?? $nv['power_cycles'] ?? null,
@@ -878,7 +896,13 @@ class RaspberryMonitor extends IPSModule
                     'mediaErrors'=>$nv['media_errors'] ?? null,'unsafeShutdowns'=>$nv['unsafe_shutdowns'] ?? null];
                 foreach (($j['ata_smart_attributes']['table'] ?? []) as $a) {
                     $id=(int)($a['id'] ?? 0);$raw=$a['raw']['value'] ?? null;
-                    if ($id===5) $data['reallocated']=$raw;
+                    if (in_array($id,[5,197,198],true) && is_numeric($raw)) {
+                        if ($id===5) $data['reallocated']=$raw;
+                    }
+                    // Vendor-specific counters are exposed as reported, never guessed as TB.
+                    if (in_array($id,[169,173,177,202,231,233,241,242,246],true)) {
+                        $data['vendorAttributes'][]=['id'=>$id,'name'=>$a['name'] ?? '', 'normalized'=>$a['value'] ?? null,'raw'=>$a['raw']['string'] ?? $raw];
+                    }
                     if ($id===197) $data['pending']=$raw;
                     if ($id===198) $data['uncorrectable']=$raw;
                 }
@@ -923,6 +947,7 @@ SH;
             $read .= "\nif test -c ".escapeshellarg($coordinator)."; then echo COORD=present; else echo COORD=missing; fi";
         }
         $state['isZigbee'] = $isZigbee;
+        if ($isZigbee) $state['coordinatorPath'] = $coordinator;
         [$ok, $output] = $this->run($read, $remote, $ip, $user, $key);
         if (!$ok) { $state['error'] = substr($output, 0, 220); return $state; }
         $state['online'] = true;
