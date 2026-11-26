@@ -21,6 +21,8 @@ class RaspberryMonitor extends IPSModule
         $this->RegisterPropertyString('ZigbeeServerIP', '192.168.178.90');
         $this->RegisterPropertyBoolean('AutoRecoverZigbee', false);
         $this->RegisterPropertyBoolean('MaintenanceMode', false);
+        $this->RegisterPropertyBoolean('AllowPackageListRefresh', false);
+        $this->RegisterAttributeString('PackageJobs', '{}');
         $this->RegisterAttributeString('LongHistory', '{}');
         $this->RegisterAttributeString('RecoveryState', '{}');
         $this->RegisterVariableBoolean('SystemHealthy', 'Systemstatus');
@@ -87,6 +89,8 @@ class RaspberryMonitor extends IPSModule
         $data["found"] = $this->GetValue("Found");
         $data['restartEnabled'] = $this->ReadPropertyBoolean('AllowRestart');
         $data['serviceRestartEnabled'] = $this->ReadPropertyBoolean('AllowServiceRestart');
+        $data['packageListRefreshEnabled'] = $this->ReadPropertyBoolean('AllowPackageListRefresh');
+        $data['packageJobs'] = json_decode($this->ReadAttributeString('PackageJobs'), true) ?: [];
         $data['restartJobs'] = json_decode($this->GetBuffer('RestartJobs'), true) ?: [];
         $data['events'] = array_reverse(json_decode($this->GetBuffer('MonitorEvents'), true) ?: []);
         $this->UpdateVisualizationValue(json_encode($data, JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE));
@@ -95,6 +99,27 @@ class RaspberryMonitor extends IPSModule
     public function RequestAction($Ident, $Value)
     {
         switch ($Ident) {
+            case 'UI.PackageLists':
+                try {
+                    if (!$this->ReadPropertyBoolean('AllowPackageListRefresh')) throw new Exception('Paketlisten-Aktualisierung ist in der Instanzkonfiguration gesperrt.');
+                    $this->startPackageListJob((string)$Value);
+                } catch (Throwable $e) {
+                    $this->SetValue('Feedback','Paketlisten: '.$e->getMessage());
+                    $this->pushUI();
+                }
+                return;
+            case 'UI.PackageJob':
+                try {
+                    $ip = (string)$Value;
+                    $this->deviceByIP($ip);
+                    $this->pollPackageJobs();
+                    $jobs = json_decode($this->ReadAttributeString('PackageJobs'),true) ?: [];
+                    $this->UpdateVisualizationValue(json_encode(['packageJob'=>$jobs[$ip] ?? ['ip'=>$ip,'status'=>'none','output'=>'Kein Vorgang vorhanden']],JSON_INVALID_UTF8_SUBSTITUTE));
+                } catch(Throwable $e) {
+                    $this->SetValue('Feedback',$e->getMessage());
+                    $this->pushUI();
+                }
+                return;
             case 'UI.History':
                 try {
                     $p = json_decode((string)$Value,true,8,JSON_THROW_ON_ERROR);
@@ -257,6 +282,7 @@ class RaspberryMonitor extends IPSModule
                     if (!$this->ReadPropertyBoolean('AllowServiceRestart')) throw new Exception('Dienstneustarts sind in der Instanzkonfiguration gesperrt.');
                     $ip = (string)$Value;
                     $item = $this->deviceByIP($ip);
+                    if (($item['mode'] ?? 'ssh') !== 'local' && $ip !== $this->ReadPropertyString('ZigbeeServerIP')) throw new Exception('Kein verwalteter Dienst für diesen Rechner konfiguriert');
                     $service = ($item['mode'] ?? 'ssh') === 'local' ? 'symcon' : 'zigbee2mqtt';
                     $ticket = bin2hex(random_bytes(16));
                     $this->SetBuffer('ServiceRestartTicket', json_encode(['ip'=>$ip,'service'=>$service,'token'=>$ticket,'expires'=>time()+60]));
@@ -633,6 +659,7 @@ class RaspberryMonitor extends IPSModule
         }
         unset($state);
         $brokerCheck = $this->probeMQTTBroker($this->ReadPropertyString('MQTTBrokerIP'), $this->ReadPropertyInteger('MQTTBrokerPort'));
+        $this->pollPackageJobs();
         $this->recoverZigbee($states);
         $faults = [];
         foreach ($states as $st) {
@@ -734,9 +761,65 @@ class RaspberryMonitor extends IPSModule
         return [$code === 0, trim(implode("\n", $output))];
     }
 
+    private function startPackageListJob(string $ip): void
+    {
+        $d = $this->deviceByIP($ip);
+        $lock = 'SRM.PackageJobs.'.$this->InstanceID;
+        if (!IPS_SemaphoreEnter($lock,0)) throw new Exception('Wartungsverwaltung belegt');
+        try {
+            $jobs = json_decode($this->ReadAttributeString('PackageJobs'),true) ?: [];
+            foreach ($jobs as $j) if (in_array($j['status'] ?? '', ['starting','running','unknown'],true)) throw new Exception('Ein Wartungsvorgang ist noch nicht abgeschlossen oder nicht überprüfbar');
+            $unit = 'srm-apt-lists-'.bin2hex(random_bytes(8));
+            $remote = ($d['mode'] ?? 'ssh') !== 'local';
+            // Separate transient unit survives SSH/PHP disconnect. No package installation.
+            // Do not use --collect: terminal status must remain observable until acknowledged.
+            $jobs[$ip] = ['ip'=>$ip,'unit'=>$unit,'status'=>'starting','started'=>time(),'output'=>'Auftrag wird übergeben'];
+            $this->WriteAttributeString('PackageJobs',json_encode($jobs));
+            $prefix = $remote ? 'sudo -n ' : '';
+            $cmd = $prefix.'/usr/bin/systemd-run --unit='.escapeshellarg($unit).' --property=Type=oneshot --property=RemainAfterExit=yes --property=TimeoutStartSec=600 --no-block /usr/bin/apt-get -o APT::Update::Error-Mode=any update';
+            [$ok,$out] = $this->run($cmd,$remote,$ip,(string)($d['user'] ?? 'pi'),(string)($d['key'] ?? ''));
+            $jobs[$ip]['status'] = $ok ? 'running' : 'unknown';
+            $jobs[$ip]['output'] = substr($out,0,2400);
+            $this->WriteAttributeString('PackageJobs',json_encode($jobs,JSON_INVALID_UTF8_SUBSTITUTE));
+            $this->SetValue('Feedback',$ok?'Paketlisten-Auftrag übergeben; Ergebnis noch offen':'Übergabe nicht bestätigt; Dienststatus prüfen');
+            $this->pushUI();
+        } finally {
+            IPS_SemaphoreLeave($lock);
+        }
+    }
+
+    private function pollPackageJobs(): void
+    {
+        $lock = 'SRM.PackageJobs.'.$this->InstanceID;
+        if (!IPS_SemaphoreEnter($lock,0)) return;
+        try {
+            $jobs = json_decode($this->ReadAttributeString('PackageJobs'),true) ?: [];
+            foreach ($jobs as $ip=>&$j) {
+                if (!in_array($j['status'] ?? '', ['starting','running','unknown'],true)) continue;
+                if (!preg_match('/^srm-apt-lists-[0-9a-f]{16}$/D',(string)($j['unit'] ?? ''))) continue;
+                try {
+                    $d = $this->deviceByIP((string)$ip);
+                    $remote = ($d['mode'] ?? 'ssh') !== 'local';
+                    $unit = escapeshellarg($j['unit'].'.service');
+                    [$ok,$out] = $this->run('systemctl show '.$unit.' -p LoadState -p ActiveState -p SubState -p Result -p ExecMainStatus -p ExecMainCode; journalctl -u '.$unit.' -n 80 --no-pager',$remote,(string)$ip,(string)($d['user'] ?? 'pi'),(string)($d['key'] ?? ''));
+                    if (!$ok) { $j['status']='unknown'; continue; }
+                    $j['output']=substr($out,0,16000);
+                    if (preg_match('/^LoadState=loaded$/m',$out) && preg_match('/^ActiveState=active$/m',$out) && preg_match('/^SubState=exited$/m',$out) && preg_match('/^Result=success$/m',$out) && preg_match('/^ExecMainStatus=0$/m',$out) && preg_match('/^ExecMainCode=1$/m',$out)) $j['status']='success';
+                    elseif (preg_match('/^ActiveState=failed$/m',$out)) $j['status']='failed';
+                    elseif (preg_match('/^LoadState=not-found$/m',$out)) $j['status']='unknown';
+                    else $j['status']='running';
+                } catch(Throwable $e) { $j['status']='unknown'; $j['output']=$e->getMessage(); }
+            }
+            unset($j);
+            $this->WriteAttributeString('PackageJobs',json_encode($jobs,JSON_INVALID_UTF8_SUBSTITUTE));
+        } finally { IPS_SemaphoreLeave($lock); }
+    }
+
     private function recoverZigbee(array $states): void
     {
         if (!$this->ReadPropertyBoolean('AutoRecoverZigbee') || !$this->ReadPropertyBoolean('AllowServiceRestart') || $this->ReadPropertyBoolean('MaintenanceMode')) return;
+        $packageJobs = json_decode($this->ReadAttributeString('PackageJobs'),true) ?: [];
+        foreach ($packageJobs as $j) if (in_array($j['status'] ?? '', ['starting','running','unknown'],true)) return;
         $record = json_decode($this->ReadAttributeString('RecoveryState'),true) ?: [];
         foreach ($states as $s) {
             if (!($s['isZigbee'] ?? false)) continue;
