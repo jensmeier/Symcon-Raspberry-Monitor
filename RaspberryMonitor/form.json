@@ -2,7 +2,7 @@
   "elements": [
     {
       "type": "Label",
-      "caption": "Raspberry Monitor 1.7 – MQTT-Broker-Protokolltest, nur lesend"
+      "caption": "Systemzentrale 3.0 – Entwicklungsstand für Symcon 9.1"
     },
     {
       "type": "List",
@@ -125,6 +125,26 @@
       "caption": "MQTT-Broker-Port",
       "minimum": 1,
       "maximum": 65535
+    },
+    {
+      "type": "ValidationTextBox",
+      "name": "ZigbeeServerIP",
+      "caption": "IP des Zigbee-Servers"
+    },
+    {
+      "type": "ValidationTextBox",
+      "name": "CoordinatorPath",
+      "caption": "Exakter Koordinatorpfad, bevorzugt /dev/serial/by-id/… (leer = unbekannt)"
+    },
+    {
+      "type": "CheckBox",
+      "name": "AutoRecoverZigbee",
+      "caption": "Automatische Zigbee-Dienstwiederherstellung (zusätzliche Dienstfreigabe erforderlich)"
+    },
+    {
+      "type": "CheckBox",
+      "name": "MaintenanceMode",
+      "caption": "Wartungsmodus – automatische Wiederherstellung sperren"
     }
   ],
   "actions": [
